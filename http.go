@@ -15,6 +15,11 @@ import (
 	"net/http"
 	"strings"
 	"unsafe"
+
+	"net/url"
+	"fmt"
+	"mime"
+	"mime/multipart"
 )
 
 func getClientIP(r *http.Request) string {
@@ -53,6 +58,14 @@ func RegisterHandler(path *C.char, handler C.HttpHandler) {
 		cBody := C.CString(string(body))
 		cClientIP := C.CString(getClientIP(r))
 		cHeaders := C.CString(getHeadersString(r))
+
+
+		data, err:=GetVariableFromFormData(string(body), r.Header.Get("Content-Type"), "b")
+		if err==nil{
+			fmt.Println("DATA:",data,r.Header.Get("Content-Type"))
+		} else {
+			fmt.Println("NOO:",data,r.Header.Get("Content-Type"))
+		}
 		
 		defer C.free(unsafe.Pointer(cMethod))
 		defer C.free(unsafe.Pointer(cPath))
@@ -76,6 +89,53 @@ func StartServer(port *C.char) {
 			panic(err)
 		}
 	}()
+}
+
+
+
+
+
+
+
+
+// GetVariableFromFormData extrae una variable de form-data (x-www-form-urlencoded o multipart/form-data)
+// Retorna el valor como string o un error si no existe.
+func GetVariableFromFormData(sBody, contentType, variableName string) (string, error) {
+	// Parsear el Content-Type para ver si es multipart
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return "", fmt.Errorf("invalid Content-Type: %v", err)
+	}
+
+	if strings.HasPrefix(mediaType, "multipart/") {
+		// Procesar como multipart/form-data
+		boundary, ok := params["boundary"]
+		if !ok {
+			return "", fmt.Errorf("no boundary in Content-Type for multipart form")
+		}
+
+		reader := multipart.NewReader(strings.NewReader(sBody), boundary)
+		form, err := reader.ReadForm(32 << 20) // 32MB max memory
+		if err != nil {
+			return "", fmt.Errorf("error reading multipart form: %v", err)
+		}
+
+		if val := form.Value[variableName]; len(val) > 0 {
+			return val[0], nil
+		}
+		return "", fmt.Errorf("variable '%s' not found in multipart form", variableName)
+	} else {
+		// Procesar como x-www-form-urlencoded
+		values, err := url.ParseQuery(sBody)
+		if err != nil {
+			return "", fmt.Errorf("error parsing form data: %v", err)
+		}
+
+		if val := values.Get(variableName); val != "" {
+			return val, nil
+		}
+		return "", fmt.Errorf("variable '%s' not found in form data", variableName)
+	}
 }
 
 func main() {}
