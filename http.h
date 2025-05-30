@@ -23,6 +23,12 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+typedef struct {
+    char* token;
+    time_t expiration;
+} TokenInfo;
 
 typedef struct {
     char* method;
@@ -119,10 +125,6 @@ extern "C" {
 extern char* GetFormValue(HttpRequest* req, char* key);
 extern char* GetHeaderValue(HttpRequest* req, char* headerName);
 extern void RegisterHandler(char* path, HttpHandler handler);
-extern char* GetAuthToken(HttpRequest* req);
-
-// Función adicional para obtener solo el Bearer token (más específica)
-extern char* GetBearerToken(HttpRequest* req);
 extern void StartServer(char* port);
 extern int AddToWhitelist(char* ip);
 extern int RemoveFromWhitelist(char* ip);
@@ -135,6 +137,20 @@ extern void StartServerWithIPFilter(char* port, int enableFilter);
 // Función auxiliar para cargar listas desde strings separados por comas
 extern void LoadWhitelist(char* ips);
 extern void LoadBlacklist(char* ips);
+extern void SetTokenSecretKey(char* key);
+extern void SetDefaultTokenExpiry(int seconds);
+extern char* GenerateToken();
+extern int ValidateToken(char* token);
+extern void InvalidateToken(char* token);
+extern time_t GetTokenExpiration(char* token);
+extern int SetTokenExpiration(char* token, time_t expiration);
+extern int CleanExpiredTokens();
+extern TokenInfo* GetTokenInfo(char* token);
+extern void FreeTokenInfo(TokenInfo* info);
+extern char* GetAuthToken(HttpRequest* req);
+extern char* GetBearerToken(HttpRequest* req);
+extern int IsTokenValid(char* token);
+extern double GetTokenRemainingTime(char* token);
 
 #ifdef __cplusplus
 }

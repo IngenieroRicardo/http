@@ -1,11 +1,53 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h> // Para sleep()
 #include "http.h"
 #include "BASICOS.h"
 
+extern void FreeToken(char* token);
+
+int main() {
+    // Configurar expiración a 1 segundo
+    SetDefaultTokenExpiry(1);
+    
+    // Generar token
+    char* token = GenerateToken();
+    printf("Token generado: %s\n", token);
+
+    //InvalidateToken(token);
+    
+    // Verificar token inmediatamente
+    int valid = ValidateToken(token);
+    printf("Token válido? %s\n", valid == 1 ? "Sí" : valid == 0 ? "No existe" : "Expirado");
+    printf("Tiempo restante: %.3f segundos\n", GetTokenRemainingTime(token));
+    
+    // Esperar 0.5 segundos
+    usleep(500000);
+    printf("\nDespués de 0.5s:\n");
+    valid = ValidateToken(token);
+    printf("Token válido? %s\n", valid == 1 ? "Sí" : valid == 0 ? "No existe" : "Expirado");
+    printf("Tiempo restante: %.3f segundos\n", GetTokenRemainingTime(token));
+    
+    // Esperar otros 0.6 segundos (total 1.1s)
+    usleep(600000);
+    printf("\nDespués de 1.1s:\n");
+    valid = ValidateToken(token);
+    printf("Token válido? %s\n", valid == 1 ? "Sí" : valid == 0 ? "No existe" : "Expirado");
+    printf("Tiempo restante: %.3f segundos\n", GetTokenRemainingTime(token));
+    
+    // Liberar memoria
+    FreeToken(token);
+    
+    return 0;
+}
+
+void FreeToken(char* token) {
+    free(token);
+}
+
 // Función auxiliar para crear respuestas JSON de error
-HttpResponse* create_error_response(int status, char* message) {
+/*HttpResponse* create_error_response(int status, char* message) {
     HttpResponse* res = create_http_response();
     if (!res) return NULL;
     
@@ -225,14 +267,14 @@ int main() {
     RegisterHandler("/form", handle_form);
     
     // Iniciar el servidor en el puerto 8012
-    //StartServer("8012");
-    StartServerWithIPFilter("8012", 1);
+    StartServer("8012");
+    //StartServerWithIPFilter("8012", 1);
     // Cargar múltiples IPs a whitelist
-    /*LoadWhitelist("192.100.1.73, 192.168.1.102, 10.0.0.20");
-    AddToWhitelist("10.0.0.15");// Agregar IPs a whitelist*/
+    //LoadWhitelist("192.100.1.73, 192.168.1.102, 10.0.0.20");
+    //AddToWhitelist("10.0.0.15");// Agregar IPs a whitelist
     // Cargar múltiples IPs a blacklist
-    LoadBlacklist("192.100.1.72, 192.168.1.102, 10.0.0.20");
-    AddToBlacklist("10.0.0.15");// Agregar IP a blacklist
+    //LoadBlacklist("192.100.1.72, 192.168.1.102, 10.0.0.20");
+    //AddToBlacklist("10.0.0.15");// Agregar IP a blacklist
 
     // Construir mensajes usando BASICOS
     char* parts[] = {"Servidor ejecutándose en http://localhost:", "8012"};
@@ -253,4 +295,4 @@ int main() {
     getchar(); // Mantener el programa en ejecución
     
     return 0;
-}
+}*/

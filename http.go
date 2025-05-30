@@ -3,6 +3,12 @@ package main
 /*
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
+typedef struct {
+    char* token;
+    time_t expiration;
+} TokenInfo;
 
 typedef struct {
     char* method;
@@ -55,6 +61,8 @@ import (
 	"strings"
 	"sync"
 	"unsafe"
+	"time"
+	"math/rand"
 )
 
 // FormData representa los datos extraídos de un formulario
@@ -332,54 +340,6 @@ func RegisterHandler(path *C.char, handler C.HttpHandler) {
 	})
 }
 
-//export GetAuthToken
-func GetAuthToken(req *C.HttpRequest) *C.char {
-    // Primero intentamos obtener el header de Authorization directamente
-    authHeader := GetHeaderValue(req, C.CString("Authorization"))
-    if authHeader == nil {
-        return nil
-    }
-    defer C.free(unsafe.Pointer(authHeader))
-    
-    authValue := C.GoString(authHeader)
-    
-    // Manejar Bearer token
-    if strings.HasPrefix(authValue, "Bearer ") {
-        return C.CString(strings.TrimPrefix(authValue, "Bearer "))
-    }
-    
-    // Manejar Basic auth
-    if strings.HasPrefix(authValue, "Basic ") {
-        // Decodificar el token Basic (usuario:contraseña en base64)
-        encoded := strings.TrimPrefix(authValue, "Basic ")
-        decoded, err := base64.StdEncoding.DecodeString(encoded)
-        if err != nil {
-            return nil
-        }
-        return C.CString(string(decoded))
-    }
-    
-    // Si no es ninguno de los formatos conocidos, devolver el valor completo
-    return C.CString(authValue)
-}
-
-// Función adicional para obtener solo el Bearer token (más específica)
-//export GetBearerToken
-func GetBearerToken(req *C.HttpRequest) *C.char {
-    authHeader := GetHeaderValue(req, C.CString("Authorization"))
-    if authHeader == nil {
-        return nil
-    }
-    defer C.free(unsafe.Pointer(authHeader))
-    
-    authValue := C.GoString(authHeader)
-    if strings.HasPrefix(authValue, "Bearer ") {
-        return C.CString(strings.TrimPrefix(authValue, "Bearer "))
-    }
-    
-    return nil
-}
-
 //export StartServer
 func StartServer(port *C.char) {
 	portStr := C.GoString(port)
@@ -571,6 +531,260 @@ func LoadBlacklist(ips *C.char) {
 			ipListManager.blacklist[ip] = true
 		}
 	}
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// TokenManager gestiona tokens de autenticación
+type TokenManager struct {
+	tokens      map[string]time.Time // token -> expiration time
+	secretKey   string               // clave secreta para validación (opcional)
+	mu          sync.RWMutex
+	tokenExpiry time.Duration       // duración por defecto de los tokens
+}
+
+var tokenManager = &TokenManager{
+	tokens:    make(map[string]time.Time),
+	secretKey: "default-secret-key", // Cambiar en producción
+	tokenExpiry: 24 * time.Hour,    // 24 horas por defecto
+}
+
+// ---------- Funciones de gestión de tokens ----------
+
+//export SetTokenSecretKey
+func SetTokenSecretKey(key *C.char) {
+	tokenManager.mu.Lock()
+	defer tokenManager.mu.Unlock()
+	tokenManager.secretKey = C.GoString(key)
+}
+
+//export SetDefaultTokenExpiry
+func SetDefaultTokenExpiry(seconds C.int) {
+	tokenManager.mu.Lock()
+	defer tokenManager.mu.Unlock()
+	tokenManager.tokenExpiry = time.Duration(seconds) * time.Second
+}
+
+//export GenerateToken
+func GenerateToken() *C.char {
+	tokenManager.mu.Lock()
+	defer tokenManager.mu.Unlock()
+	
+	// Generar un token único (en producción usar un método más seguro)
+	token := fmt.Sprintf("%x-%x-%x", 
+		time.Now().UnixNano(), 
+		rand.Int63(), 
+		rand.Int63())
+	
+	expiration := time.Now().Add(tokenManager.tokenExpiry)
+	tokenManager.tokens[token] = expiration
+	
+	return C.CString(token)
+}
+
+//export ValidateToken
+func ValidateToken(token *C.char) C.int {
+    tokenStr := C.GoString(token)
+    
+    tokenManager.mu.RLock()
+    defer tokenManager.mu.RUnlock()
+    
+    expiration, exists := tokenManager.tokens[tokenStr]
+    if !exists {
+        return 0 // Token no existe
+    }
+    
+    if time.Now().After(expiration) {
+        return -1 // Token expirado
+    }
+    
+    // Token válido, calcular margen adicional (1ms) para evitar falsos positivos
+    if time.Until(expiration) <= time.Millisecond {
+        return 0 // Considerar como expirado si está muy cerca
+    }
+    
+    return 1 // Token válido
+}
+
+//export InvalidateToken
+func InvalidateToken(token *C.char) {
+	tokenStr := C.GoString(token)
+	
+	tokenManager.mu.Lock()
+	defer tokenManager.mu.Unlock()
+	
+	delete(tokenManager.tokens, tokenStr)
+}
+
+//export GetTokenExpiration
+func GetTokenExpiration(token *C.char) C.time_t {
+	tokenStr := C.GoString(token)
+	
+	tokenManager.mu.RLock()
+	defer tokenManager.mu.RUnlock()
+	
+	if expiration, exists := tokenManager.tokens[tokenStr]; exists {
+		return C.time_t(expiration.Unix())
+	}
+	
+	return 0
+}
+
+//export SetTokenExpiration
+func SetTokenExpiration(token *C.char, expiration C.time_t) C.int {
+	tokenStr := C.GoString(token)
+	expTime := time.Unix(int64(expiration), 0)
+	
+	tokenManager.mu.Lock()
+	defer tokenManager.mu.Unlock()
+	
+	if _, exists := tokenManager.tokens[tokenStr]; exists {
+		tokenManager.tokens[tokenStr] = expTime
+		return 1
+	}
+	
+	return 0
+}
+
+//export CleanExpiredTokens
+func CleanExpiredTokens() C.int {
+	tokenManager.mu.Lock()
+	defer tokenManager.mu.Unlock()
+	
+	count := 0
+	now := time.Now()
+	
+	for token, expiration := range tokenManager.tokens {
+		if now.After(expiration) {
+			delete(tokenManager.tokens, token)
+			count++
+		}
+	}
+	
+	return C.int(count)
+}
+
+//export GetTokenInfo
+func GetTokenInfo(token *C.char) *C.TokenInfo {
+	tokenStr := C.GoString(token)
+	
+	tokenManager.mu.RLock()
+	defer tokenManager.mu.RUnlock()
+	
+	if expiration, exists := tokenManager.tokens[tokenStr]; exists {
+		cToken := C.CString(tokenStr)
+		cInfo := &C.TokenInfo{
+			token:      cToken,
+			expiration: C.time_t(expiration.Unix()),
+		}
+		// Nota: La memoria de cToken debe ser liberada por el llamador
+		return cInfo
+	}
+	
+	return nil
+}
+
+//export FreeTokenInfo
+func FreeTokenInfo(info *C.TokenInfo) {
+	if info == nil {
+		return
+	}
+	
+	C.free(unsafe.Pointer(info.token))
+	C.free(unsafe.Pointer(info))
+}
+
+// ---------- Funciones existentes mejoradas ----------
+
+//export GetAuthToken
+func GetAuthToken(req *C.HttpRequest) *C.char {
+    // Primero intentamos obtener el header de Authorization directamente
+    authHeader := GetHeaderValue(req, C.CString("Authorization"))
+    if authHeader == nil {
+        return nil
+    }
+    defer C.free(unsafe.Pointer(authHeader))
+    
+    authValue := C.GoString(authHeader)
+    
+    // Manejar Bearer token
+    if strings.HasPrefix(authValue, "Bearer ") {
+        token := strings.TrimPrefix(authValue, "Bearer ")
+        
+        // Verificar si el token es válido
+        if ValidateToken(C.CString(token)) > 0 {
+            return C.CString(token)
+        }
+        return nil
+    }
+    
+    // Manejar Basic auth
+    if strings.HasPrefix(authValue, "Basic ") {
+        // Decodificar el token Basic (usuario:contraseña en base64)
+        encoded := strings.TrimPrefix(authValue, "Basic ")
+        decoded, err := base64.StdEncoding.DecodeString(encoded)
+        if err != nil {
+            return nil
+        }
+        return C.CString(string(decoded))
+    }
+    
+    // Si no es ninguno de los formatos conocidos, devolver el valor completo
+    return C.CString(authValue)
+}
+
+//export GetBearerToken
+func GetBearerToken(req *C.HttpRequest) *C.char {
+    authHeader := GetHeaderValue(req, C.CString("Authorization"))
+    if authHeader == nil {
+        return nil
+    }
+    defer C.free(unsafe.Pointer(authHeader))
+    
+    authValue := C.GoString(authHeader)
+    if strings.HasPrefix(authValue, "Bearer ") {
+        token := strings.TrimPrefix(authValue, "Bearer ")
+        
+        // Verificar si el token es válido
+        if ValidateToken(C.CString(token)) > 0 {
+            return C.CString(token)
+        }
+    }
+    
+    return nil
+}
+
+//export IsTokenValid
+func IsTokenValid(token *C.char) C.int {
+    return ValidateToken(token)
+}
+
+//export GetTokenRemainingTime
+func GetTokenRemainingTime(token *C.char) C.double {
+    tokenStr := C.GoString(token)
+    
+    tokenManager.mu.RLock()
+    defer tokenManager.mu.RUnlock()
+    
+    if expiration, exists := tokenManager.tokens[tokenStr]; exists {
+        remaining := time.Until(expiration).Seconds()
+        return C.double(remaining)
+    }
+    
+    return -1.0 // Token no encontrado
 }
 
 func main() {}
