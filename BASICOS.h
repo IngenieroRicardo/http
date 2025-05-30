@@ -21,7 +21,13 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 
 #line 3 "BASICOS.go"
 
-#include <stdlib.h> // Para free()
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+    char** data;
+    int count;
+} StringArray;
 
 #line 1 "cgo-generated-wrapper"
 
@@ -100,6 +106,22 @@ extern char* ReplaceAll(char* s, char* old, char* new);
 
 // FreeString libera memoria asignada por funciones que retornan *C.char
 extern void FreeString(char* s);
+extern StringArray* NewStringArray(int size);
+
+// SetStringArrayValue asigna un valor a una posición del array
+extern void SetStringArrayValue(StringArray* arr, int index, char* value);
+
+// GetStringArrayValue obtiene un valor del array
+extern char* GetStringArrayValue(StringArray* arr, int index);
+
+// GetStringArraySize obtiene el tamaño del array
+extern int GetStringArraySize(StringArray* arr);
+
+// FreeStringArray libera la memoria de un StringArray
+extern void FreeStringArray(StringArray* arr);
+
+// JoinStringArray une los elementos del array con un separador
+extern char* JoinStringArray(StringArray* arr, char* delimiter);
 
 #ifdef __cplusplus
 }
