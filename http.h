@@ -22,11 +22,42 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 #line 3 "http.go"
 
 #include <stdlib.h>
+#include <string.h>
 
-typedef char* (*HttpHandler)(char* method, char* path, char* body, char* client_ip, char* headers);
+typedef struct {
+    char* method;
+    char* path;
+    char* body;
+    char* client_ip;
+    char* headers;
+    char* content_type;
+} HttpRequest;
 
-static char* call_handler(HttpHandler handler, char* method, char* path, char* body, char* client_ip, char* headers) {
-    return handler(method, path, body, client_ip, headers);
+typedef struct {
+    char* body;
+    char* content_type;
+    int status_code;
+    char* headers;
+} HttpResponse;
+
+static HttpResponse* create_http_response() {
+    HttpResponse* res = (HttpResponse*)malloc(sizeof(HttpResponse));
+    memset(res, 0, sizeof(HttpResponse));
+    return res;
+}
+
+static void free_http_response(HttpResponse* res) {
+    if (res == NULL) return;
+    free(res->body);
+    free(res->content_type);
+    free(res->headers);
+    free(res);
+}
+
+typedef HttpResponse* (*HttpHandler)(HttpRequest* req);
+
+static HttpResponse* call_handler(HttpHandler handler, HttpRequest* req) {
+    return handler(req);
 }
 
 #line 1 "cgo-generated-wrapper"
@@ -85,8 +116,25 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
+extern char* GetFormValue(HttpRequest* req, char* key);
+extern char* GetHeaderValue(HttpRequest* req, char* headerName);
 extern void RegisterHandler(char* path, HttpHandler handler);
+extern char* GetAuthToken(HttpRequest* req);
+
+// Función adicional para obtener solo el Bearer token (más específica)
+extern char* GetBearerToken(HttpRequest* req);
 extern void StartServer(char* port);
+extern int AddToWhitelist(char* ip);
+extern int RemoveFromWhitelist(char* ip);
+extern int AddToBlacklist(char* ip);
+extern int RemoveFromBlacklist(char* ip);
+extern int IsWhitelisted(char* ip);
+extern int IsBlacklisted(char* ip);
+extern void StartServerWithIPFilter(char* port, int enableFilter);
+
+// Función auxiliar para cargar listas desde strings separados por comas
+extern void LoadWhitelist(char* ips);
+extern void LoadBlacklist(char* ips);
 
 #ifdef __cplusplus
 }
