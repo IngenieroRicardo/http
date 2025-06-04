@@ -7,7 +7,7 @@
 
 extern void FreeToken(char* token);
 
-int main() {
+/*int main() {
     // Configurar expiración a 1 segundo
     SetDefaultTokenExpiry(1);
     
@@ -44,10 +44,10 @@ int main() {
 
 void FreeToken(char* token) {
     free(token);
-}
+}*/
 
 // Función auxiliar para crear respuestas JSON de error
-/*HttpResponse* create_error_response(int status, char* message) {
+HttpResponse* create_error_response(int status, char* message) {
     HttpResponse* res = create_http_response();
     if (!res) return NULL;
     
@@ -295,4 +295,4 @@ int main() {
     getchar(); // Mantener el programa en ejecución
     
     return 0;
-}*/
+}
