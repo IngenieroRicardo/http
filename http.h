@@ -19,52 +19,39 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 /* Start of preamble from import "C" comments.  */
 
 
-#line 3 "http.go"
+#line 4 "http.go"
 
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
+typedef struct {
+    char* method;
+    char* url;
+    char* body;
+    size_t body_len;
+    char* remote_addr;
+    char* headers;
+} HttpRequest;
+
+typedef struct {
+    char* data;
+    size_t len;
+    int status_code;
+    char* content_type;
+} HttpResponse;
+
+typedef void (*HttpHandler)(HttpRequest* req, HttpResponse* resp);
+
+static inline void callCHandler(HttpHandler handler, HttpRequest* req, HttpResponse* resp) {
+    if (handler) handler(req, resp);
+}
+
+// Estructura para tokens
 typedef struct {
     char* token;
     time_t expiration;
 } TokenInfo;
 
-typedef struct {
-    char* method;
-    char* path;
-    char* body;
-    char* client_ip;
-    char* headers;
-    char* content_type;
-} HttpRequest;
-
-typedef struct {
-    char* body;
-    char* content_type;
-    int status_code;
-    char* headers;
-} HttpResponse;
-
-static HttpResponse* create_http_response() {
-    HttpResponse* res = (HttpResponse*)malloc(sizeof(HttpResponse));
-    memset(res, 0, sizeof(HttpResponse));
-    return res;
-}
-
-static void free_http_response(HttpResponse* res) {
-    if (res == NULL) return;
-    free(res->body);
-    free(res->content_type);
-    free(res->headers);
-    free(res);
-}
-
-typedef HttpResponse* (*HttpHandler)(HttpRequest* req);
-
-static HttpResponse* call_handler(HttpHandler handler, HttpRequest* req) {
-    return handler(req);
-}
 
 #line 1 "cgo-generated-wrapper"
 
@@ -122,10 +109,11 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
-extern char* GetFormValue(HttpRequest* req, char* key);
-extern char* GetHeaderValue(HttpRequest* req, char* headerName);
+extern void SetResponseStatusCode(HttpResponse* resp, int code);
+extern void SetResponseContentType(HttpResponse* resp, char* contentType);
+extern void SetResponseText(HttpResponse* resp, char* text);
+extern void SetResponseBinary(HttpResponse* resp, char* base64Data);
 extern void RegisterHandler(char* path, HttpHandler handler);
-extern void StartServer(char* port);
 extern int AddToWhitelist(char* ip);
 extern int RemoveFromWhitelist(char* ip);
 extern int AddToBlacklist(char* ip);
@@ -137,6 +125,11 @@ extern void StartServerWithIPFilter(char* port, int enableFilter);
 // Función auxiliar para cargar listas desde strings separados por comas
 extern void LoadWhitelist(char* ips);
 extern void LoadBlacklist(char* ips);
+extern char* GetRequestMethod(HttpRequest* req);
+extern char* GetRequestURL(HttpRequest* req);
+extern char* GetRequestBody(HttpRequest* req, size_t* length);
+extern char* GetRequestRemoteAddr(HttpRequest* req);
+extern char* GetRequestHeader(HttpRequest* req, char* key);
 extern void SetTokenSecretKey(char* key);
 extern void SetDefaultTokenExpiry(int seconds);
 extern char* GenerateToken();
@@ -147,8 +140,6 @@ extern int SetTokenExpiration(char* token, time_t expiration);
 extern int CleanExpiredTokens();
 extern TokenInfo* GetTokenInfo(char* token);
 extern void FreeTokenInfo(TokenInfo* info);
-extern char* GetAuthToken(HttpRequest* req);
-extern char* GetBearerToken(HttpRequest* req);
 extern int IsTokenValid(char* token);
 extern double GetTokenRemainingTime(char* token);
 
