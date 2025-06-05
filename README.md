@@ -163,7 +163,7 @@ int main() {
 ```C
 #include <stdio.h>
 #include <unistd.h>
-#include "http.h"
+#include "HTTP.h"
 
 Response ip_check_handler(Request req) {
     char* client_ip = GetClientIP(req);
@@ -200,7 +200,32 @@ int main() {
 
 ---
 
+### 🧪 Ejemplo usando HTTPS con certificados
 
+```C
+#include <stdio.h>
+#include <unistd.h>
+#include "HTTP.h"
+
+Response secure_handler(Request req) {
+    return CreateResponse(200, "{\"message\":\"Secure connection established\"}");
+}
+
+int main() {
+    RegisterHandler("/secure-data", secure_handler);
+    
+    // Iniciar servidor HTTPS con certificados
+    StartServer("443", 0, "server.crt", "server.key");
+    
+    while(1) {
+        sleep(1);
+    }
+    
+    return 0;
+}
+```
+
+---
 
 ## 📚 Documentación de la API
 
