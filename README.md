@@ -230,45 +230,36 @@ int main() {
 ## 📚 Documentación de la API
 
 ### Funciones Principales
-
-#### Manejo Básico de HTTP
-- `HTTPResult ParseHTTP(const char* HTTP_str)`: Analiza una cadena HTTP
-- `int IsValidHTTP(const char* HTTP_str)`: Verifica si una cadena es HTTP válido
+- `void RegisterHandler(char* path, HttpHandler handler)`: Registrar un manejador de ruta
+- `void StartServer(char* port, int enableFilter, char* certFile, char* keyFile)`: Iniciar el servidor HTTP
 
 #### Obtención de Valores
-- `HTTPResult GetHTTPValue(const char* HTTP_str, const char* key)`: Obtiene valor por clave
-- `HTTPResult GetHTTPValueByPath(const char* HTTP_str, const char* path)`: Obtiene valor por ruta
-- `HTTPResult GetArrayLength(const char* HTTP_str)`: Obtiene longitud de array
-- `HTTPResult GetArrayItem(const char* HTTP_str, int index)`: Obtiene elemento de array
+- `char* GetMethod(Request r)`: Obtener método HTTP
+- `char* GetPath(Request r)`: Obtener ruta solicitada
+- `char* GetBody(Request r)`: Obtener cuerpo de la petición
+- `char* GetClientIP(Request r)`: Obtener IP del cliente
+- `char* GetHeaders(Request r)`: Obtener todos los headers
+- `char* GetHeaderValue(Request r, *char clave)`: Obtener valor de header específico
+- `char* GetUsername(Request r)`: Obtener usuario de basic auth
+- `char* GetPassword(Request r)`: Obtener contraseña de basic auth
+- `char* GetBearerToken(Request r)`: Obtener token bearer
 
-#### Construcción/Modificación
-- `HTTPResult CreateEmptyHTTP()`: Crea objeto HTTP vacío
-- `HTTPResult CreateEmptyArray()`: Crea array HTTP vacío
-- `HTTPResult AddStringToHTTP(const char* HTTP_str, const char* key, const char* value)`
-- `HTTPResult AddNumberToHTTP(const char* HTTP_str, const char* key, double value)`
-- `HTTPResult AddBooleanToHTTP(const char* HTTP_str, const char* key, int value)`
-- `HTTPResult AddHTTPToHTTP(const char* parent_HTTP, const char* key, const char* child_HTTP)`
-- `HTTPResult AddItemToArray(const char* HTTP_array, const char* item)`
-- `HTTPResult RemoveKeyFromHTTP(const char* HTTP_str, const char* key)`
-- `HTTPResult RemoveItemFromArray(const char* HTTP_array, int index)`
-- `HTTPResult MergeHTTP(const char* HTTP1, const char* HTTP2)`: Combina dos HTTPs
+#### Gestión de IPs
+- `int AddToWhitelist(char* ip)`
+- `int RemoveFromWhitelist(char* ip)`
+- `int AddToBlacklist(char* ip)`
+- `int RemoveFromBlacklist(char* ip)`
+- `int IsWhitelisted(char* ip)`
+- `int IsBlacklisted(char* ip)`
+- `void LoadWhitelist(char* ips)`: Cargar lista de IPs separadas por comas
+- `void LoadBlacklist(char* ips)`: Cargar lista de IPs separadas por comas
 
-#### Utilidades
-- `void FreeHTTPResult(HTTPResult result)`: Libera memoria de resultados
-- `void FreeHTTPArrayResult(HTTPArrayResult result)`: Libera memoria de arrays
-
-### Estructuras
-```c
-typedef struct {
-    char* value;      // Valor obtenido
-    int is_valid;     // 1 si es válido, 0 si hay error
-    char* error;      // Mensaje de error (si lo hay)
-} HTTPResult;
-
-typedef struct {
-    char** items;     // Array de elementos
-    int count;        // Número de elementos
-    int is_valid;     // 1 si es válido, 0 si hay error
-    char* error;      // Mensaje de error (si lo hay)
-} HTTPArrayResult;
-```
+#### Gestión de Tokens
+- `char* GenerateToken()`: Crear nuevo token
+- `int ValidateToken(char* token)`: Validar token (1=válido, 0=inválido, -1=expirado)
+- `void InvalidateToken(char* token)`: Invalidar token
+- `void SetTokenSecretKey(char* key)`: Establecer clave secreta para tokens
+- `void SetDefaultTokenExpiry(int seconds)`: Establecer TTL por defecto
+- `char* GenerateToken()`: Obtener info del token (recordar usar FreeTokenInfo)
+- `void FreeTokenInfo(TokenInfo* info)`: Liberar memoria de la info del token
+- `int CleanExpiredTokens()`: Eliminar tokens expirados
