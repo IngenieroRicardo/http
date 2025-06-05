@@ -27,10 +27,12 @@ Compilada usando: `go build -o HTTP.dll -buildmode=c-shared HTTP.go`
 ```C
 #include <stdio.h>
 #include <unistd.h>
-#include "http.h"
+#include "HTTP.h"
 
 Response basic_handler(Request req) {
-    printf("Request received: %s %s\n", GetMethod(req), GetPath(req));
+    char* method = GetMethod(req);
+    char* path = GetPath(req);
+    printf("Request received: %s %s\n", method, path);
     
     // Crear una respuesta simple
     return CreateResponse(200, "{\"message\":\"Hola Mundo C handler!\"}");
