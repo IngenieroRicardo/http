@@ -22,10 +22,34 @@ Compilada usando: `go build -o HTTP.dll -buildmode=c-shared HTTP.go`
 
 ---
 
-### 🧪 Ejemplo básico para leer HTTP
+### 🧪 Ejemplo básico
 
 ```C
+#include <stdio.h>
+#include <unistd.h>
+#include "http.h"
 
+Response basic_handler(Request req) {
+    printf("Request received: %s %s\n", GetMethod(req), GetPath(req));
+    
+    // Crear una respuesta simple
+    return CreateResponse(200, "{\"message\":\"Hola Mundo C handler!\"}");
+}
+
+int main() {
+    // Registrar un manejador para la ruta "/hola"
+    RegisterHandler("/hola", basic_handler);
+    
+    // Iniciar el servidor en el puerto 8080 sin filtro de IP
+    StartServer("8080", 0, NULL, NULL);
+    
+    // Mantener el programa en ejecución
+    while(1) {
+        sleep(1);
+    }
+    
+    return 0;
+}
 ```
 
 ---
