@@ -56,10 +56,35 @@ int main() {
 
 ---
 
-### 🧪 Ejemplo para escribir, editar y eliminar HTTP
+### 🧪 Ejemplo de Autenticacion Basica
 
 ```C
+#include <stdio.h>
+#include <unistd.h>
+#include "HTTP.h"
 
+Response auth_handler(Request req) {
+    char* username = GetUsername(req);
+    char* password = GetPassword(req);
+    
+    // Verificación simple de credenciales (en producción usar algo más seguro)
+    if (strcmp(username, "admin") == 0 && strcmp(password, "secret") == 0) {
+        return CreateResponse(200, "{\"message\":\"Bienvenido admin!\"}");
+    }
+    
+    return CreateResponse(403, "{\"error\":\"Invalid credentials\"}");
+}
+
+int main() {
+    RegisterHandler("/seguro", auth_handler);
+    StartServer("8080", 0, NULL, NULL);
+    
+    while(1) {
+        sleep(1);
+    }
+    
+    return 0;
+}
 ```
 
 ---
