@@ -142,7 +142,7 @@ int main() {
     RegisterHandler("/api/login", login_handler);
     RegisterHandler("/api/protected", token_handler);
     
-    StartServer("8123", 0, NULL, NULL);
+    StartServer("8080", 0, NULL, NULL);
     
     while(1) {
         sleep(1);
@@ -151,6 +151,48 @@ int main() {
     return 0;
 }
 
+```
+
+---
+
+### 🧪 Ejemplo de bloqueo mediante WhiteList y BlackList
+
+```C
+#include <stdio.h>
+#include <unistd.h>
+#include "http.h"
+
+Response ip_check_handler(Request req) {
+    char* client_ip = GetClientIP(req);
+    char* response_body = malloc(100);
+    
+    sprintf(response_body, "{\"message\":\"%s success\"}", client_ip);
+    
+    Response res = CreateResponse(200, response_body);
+    free(response_body); // Liberar la memoria asignada
+    return res;
+}
+
+int main() {
+    // Cargar listas de IPs
+    LoadWhitelist("192.168.1.100,192.168.1.101");
+    LoadBlacklist("10.0.0.5,10.0.0.6");
+    
+    // Agregar IPs dinámicamente
+    AddToWhitelist("127.0.0.1");
+    AddToBlacklist("192.168.1.102");
+    
+    RegisterHandler("/check-ip", ip_check_handler);
+    
+    // Iniciar servidor con filtro de IP habilitado
+    StartServer("8080", 1, NULL, NULL);
+    
+    while(1) {
+        sleep(1);
+    }
+    
+    return 0;
+}
 ```
 
 ---
