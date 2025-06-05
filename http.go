@@ -131,84 +131,95 @@ func getHeadersString(r *http.Request) string {
 
 //export RegisterHandler
 func RegisterHandler(path *C.char, handler C.HttpHandler) {
-	goPath := C.GoString(path)
-	http.HandleFunc(goPath, func(w http.ResponseWriter, r *http.Request) {
-		// Validar Content-Type solo para requests con body
-        if r.ContentLength > 0 {
+    goPath := C.GoString(path)
+    http.HandleFunc(goPath, func(w http.ResponseWriter, r *http.Request) {
+        // Configurar content-type por defecto para todas las respuestas
+        w.Header().Set("Content-Type", "application/json")
+
+        // Manejar el body solo para métodos que pueden tenerlo
+        var body []byte
+        var err error
+        
+        if r.ContentLength > 0 && r.Method != http.MethodGet && r.Method != http.MethodHead {
+            // Validar Content-Type
             contentType := r.Header.Get("Content-Type")
             if !strings.HasPrefix(contentType, "application/json") {
-                // Crear respuesta de error directamente en Go
-                errorResponse := C.HttpResponse{
-                    status_code: C.int(http.StatusUnsupportedMediaType),
-                    body:        C.CString(`{"error": "Content-Type must be application/json"}`),
-                }
-                defer C.free(unsafe.Pointer(errorResponse.body))
-                
-                w.WriteHeader(int(errorResponse.status_code))
-                w.Write([]byte(C.GoString(errorResponse.body)))
+                sendErrorResponse(w, http.StatusUnsupportedMediaType, 
+                    "Content-Type must be application/json")
                 return
             }
             
-            // Validar que el body sea JSON válido
-            body, err := io.ReadAll(r.Body)
+            // Leer y validar body
+            body, err = io.ReadAll(r.Body)
             if err != nil {
-                errorResponse := C.HttpResponse{
-                    status_code: C.int(http.StatusBadRequest),
-                    body:        C.CString(`{"error": "Error reading request body"}`),
-                }
-                defer C.free(unsafe.Pointer(errorResponse.body))
-                
-                w.WriteHeader(int(errorResponse.status_code))
-                w.Write([]byte(C.GoString(errorResponse.body)))
+                sendErrorResponse(w, http.StatusBadRequest, 
+                    "Error reading request body")
                 return
             }
             defer r.Body.Close()
 
             if !json.Valid(body) {
-                errorResponse := C.HttpResponse{
-                    status_code: C.int(http.StatusBadRequest),
-                    body:        C.CString(`{"error": "Invalid JSON format"}`),
-                }
-                defer C.free(unsafe.Pointer(errorResponse.body))
-                
-                w.WriteHeader(int(errorResponse.status_code))
-                w.Write([]byte(C.GoString(errorResponse.body)))
+                sendErrorResponse(w, http.StatusBadRequest, 
+                    "Invalid JSON format")
                 return
             }
+        }
 
-			authHeader := r.Header.Get("Authorization")
-			username, password, bearerToken := "", "", ""
+        // Procesar autenticación
+        authHeader := r.Header.Get("Authorization")
+        username, password, bearerToken := "", "", ""
 
-			if authHeader != "" {
-				if u, p, ok := parseBasicAuth(authHeader); ok {
-					username, password = u, p
-				} else if token, ok := parseBearerToken(authHeader); ok {
-					bearerToken = token
-				}
-			}
+        if authHeader != "" {
+            if u, p, ok := parseBasicAuth(authHeader); ok {
+                username, password = u, p
+            } else if token, ok := parseBearerToken(authHeader); ok {
+                bearerToken = token
+            }
+        }
 
-			req := C.HttpRequest{
-				method:       C.CString(r.Method),
-				path:         C.CString(r.URL.Path),
-				body:         C.CString(string(body)),
-				client_ip:    C.CString(getClientIP(r)),
-				headers:      C.CString(getHeadersString(r)),
-				username:     C.CString(username),
-				password:     C.CString(password),
-				bearer_token: C.CString(bearerToken),
-			}
-			defer freeRequest(&req)
+        // Crear request para el handler C
+        req := C.HttpRequest{
+            method:       C.CString(r.Method),
+            path:         C.CString(r.URL.Path),
+            body:         C.CString(string(body)),
+            client_ip:    C.CString(getClientIP(r)),
+            headers:      C.CString(getHeadersString(r)),
+            username:     C.CString(username),
+            password:     C.CString(password),
+            bearer_token: C.CString(bearerToken),
+        }
+        defer freeRequest(&req)
 
-			cResponse := C.call_handler(handler, &req)
-			defer func() {
-				C.free(unsafe.Pointer(cResponse.body))
-				C.free(unsafe.Pointer(cResponse))
-			}()
+        // Llamar al handler C
+        cResponse := C.call_handler(handler, &req)
+        defer func() {
+            if cResponse != nil {
+                if cResponse.body != nil {
+                    C.free(unsafe.Pointer(cResponse.body))
+                }
+                C.free(unsafe.Pointer(cResponse))
+            }
+        }()
 
-			w.WriteHeader(int(cResponse.status_code))
-			w.Write([]byte(C.GoString(cResponse.body)))
-		}
-	})
+        // Manejar respuesta
+        if cResponse == nil {
+            sendErrorResponse(w, http.StatusInternalServerError, 
+                "Handler returned nil response")
+            return
+        }
+
+        w.WriteHeader(int(cResponse.status_code))
+        if cResponse.body != nil {
+            w.Write([]byte(C.GoString(cResponse.body)))
+        }
+    })
+}
+
+// Función helper para enviar respuestas de error
+func sendErrorResponse(w http.ResponseWriter, statusCode int, message string) {
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(statusCode)
+    json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 // Modificar freeRequest para liberar el nuevo campo
