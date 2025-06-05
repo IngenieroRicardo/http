@@ -1,2 +1,2 @@
 # http
- Libreria C para servicio HTTP
+Libreria C para crear WebService JSON
