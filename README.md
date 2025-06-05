@@ -1,5 +1,5 @@
 # HTTP
-Libreria C para crear WebService JSON.
+Libreria C para crear WebService JSON.  
 Compilada usando: `go build -o HTTP.dll -buildmode=c-shared HTTP.go`
 
 ---
