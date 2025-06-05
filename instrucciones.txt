@@ -1,5 +1,0 @@
-go build -o http.so -buildmode=c-shared http.go
-
-gcc -o server main.c ./http.so
-
-./server
