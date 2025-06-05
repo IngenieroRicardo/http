@@ -1,31 +1,9 @@
+// http.go
 package main
-
 
 /*
 #include <stdlib.h>
 #include <string.h>
-
-typedef struct {
-    char* method;
-    char* url;
-    char* body;
-    size_t body_len;
-    char* remote_addr;
-    char* headers;
-} HttpRequest;
-
-typedef struct {
-    char* data;
-    size_t len;
-    int status_code;
-    char* content_type;
-} HttpResponse;
-
-typedef void (*HttpHandler)(HttpRequest* req, HttpResponse* resp);
-
-static inline void callCHandler(HttpHandler handler, HttpRequest* req, HttpResponse* resp) {
-    if (handler) handler(req, resp);
-}
 
 // Estructura para tokens
 typedef struct {
@@ -33,209 +11,325 @@ typedef struct {
     time_t expiration;
 } TokenInfo;
 
+typedef struct {
+    const char* method;
+    const char* path;
+    const char* body;
+    const char* client_ip;
+    const char* headers;
+    const char* username;
+    const char* password;
+    const char* bearer_token;
+} HttpRequest;
+
+typedef struct {
+    int status_code;
+    const char* body;
+} HttpResponse;
+
+typedef HttpRequest* Request;
+typedef HttpResponse* Response;
+
+typedef Response (*HttpHandler)(Request req);
+
+static inline Response call_handler(HttpHandler handler, Request req) {
+    return handler(req);
+}
+
+static inline Response create_response_with_params(int status_code, const char* body) {
+    Response res = (Response)malloc(sizeof(HttpResponse));
+    if (res) {
+        res->status_code = status_code;
+        res->body = body ? strdup(body) : NULL;
+    }
+    return res;
+}
+
+static inline Response create_response() {
+    return create_response_with_params(0, NULL);
+}
 */
 import "C"
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"unsafe"
-	"time"
+	"net"
+	"encoding/base64"
+	"encoding/json"
 	"sync"
+	"time"
 	"math/rand"
 	"fmt"
-	"encoding/base64"
-	"net"
 )
 
-func decodeBase64(input *C.char, output **C.char) C.size_t {
-	encoded := C.GoString(input)
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
+// Función para extraer username y password del header Authorization
+func parseBasicAuth(authHeader string) (username, password string, ok bool) {
+	const prefix = "Basic "
+	if !strings.HasPrefix(authHeader, prefix) {
+		return "", "", false
+	}
+	c, err := base64.StdEncoding.DecodeString(authHeader[len(prefix):])
 	if err != nil {
-		return 0
+		return "", "", false
 	}
-	
-	*output = (*C.char)(C.malloc(C.size_t(len(decoded))))
-	if *output == nil {
-		return 0
+	cs := string(c)
+	s := strings.IndexByte(cs, ':')
+	if s < 0 {
+		return "", "", false
 	}
-	
-	C.memcpy(unsafe.Pointer(*output), unsafe.Pointer(&decoded[0]), C.size_t(len(decoded)))
-	return C.size_t(len(decoded))
-}
-func extractIP(remoteAddr string) string {
-    // Eliminar el puerto
-    ip := remoteAddr
-    if strings.LastIndex(ip, ":") > strings.LastIndex(ip, "]") {
-        ip = ip[:strings.LastIndex(ip, ":")]
-    }
-    
-    // Eliminar corchetes de IPv6
-    if strings.HasPrefix(ip, "[") && strings.HasSuffix(ip, "]") {
-        ip = ip[1:len(ip)-1]
-    }
-    
-    return ip
+	return cs[:s], cs[s+1:], true
 }
 
+// Función para extraer token Bearer del header Authorization
+func parseBearerToken(authHeader string) (token string, ok bool) {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(authHeader, prefix) {
+		return "", false
+	}
+	return authHeader[len(prefix):], true
+}
+
+// getClientIP obtiene la IP real del cliente
 func getClientIP(r *http.Request) string {
-	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-		return strings.Split(ip, ",")[0]
-	}
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return ip
-	}
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	return ip
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//export SetResponseStatusCode
-func SetResponseStatusCode(resp *C.HttpResponse, code C.int) {
-	if resp != nil {
-		resp.status_code = code
-	}
-}
-
-//export SetResponseContentType
-func SetResponseContentType(resp *C.HttpResponse, contentType *C.char) {
-	if resp == nil || contentType == nil {
-		return
-	}
-
-	// Liberar el content_type anterior si existe
-	if resp.content_type != nil {
-		C.free(unsafe.Pointer(resp.content_type))
-	}
-
-	resp.content_type = C.CString(C.GoString(contentType))
-}
-
-//export SetResponseText
-func SetResponseText(resp *C.HttpResponse, text *C.char) {
-    if resp == nil || text == nil {
-        return
+    if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+        ips := strings.Split(xff, ",")
+        ip := strings.TrimSpace(ips[0])
+        if ip != "" {
+            return ip
+        }
     }
 
-    // Liberar datos anteriores si existen
-    if resp.data != nil {
-        C.free(unsafe.Pointer(resp.data))
+    if xri := r.Header.Get("X-Real-IP"); xri != "" {
+        return xri
     }
 
-    str := C.GoString(text)
-    resp.data = C.CString(str)
-    resp.len = C.size_t(len(str))
+    if ra := r.RemoteAddr; ra != "" {
+        ip, _, err := net.SplitHostPort(ra)
+        if err == nil {
+            return ip
+        }
+        return ra
+    }
+
+    return ""
 }
 
-//export SetResponseBinary
-func SetResponseBinary(resp *C.HttpResponse, base64Data *C.char) {
-    if resp == nil || base64Data == nil {
-		return
+func getHeadersString(r *http.Request) string {
+	var sb strings.Builder
+	for name, values := range r.Header {
+		for _, value := range values {
+			sb.WriteString(name)
+			sb.WriteString(": ")
+			sb.WriteString(value)
+			sb.WriteString("\n")
+		}
 	}
-
-	// Liberar datos anteriores si existen
-	if resp.data != nil {
-		C.free(unsafe.Pointer(resp.data))
-		resp.data = nil
-		resp.len = 0
-	}
-
-	var decodedData *C.char
-	decodedLen := decodeBase64(base64Data, &decodedData)
-	
-	if decodedLen > 0 && decodedData != nil {
-		resp.data = decodedData
-		resp.len = decodedLen
-	}
+	return sb.String()
 }
 
 //export RegisterHandler
 func RegisterHandler(path *C.char, handler C.HttpHandler) {
-	pathStr := C.GoString(path)
-	
-	http.HandleFunc(pathStr, func(w http.ResponseWriter, r *http.Request) {
-		// Leer cuerpo del request
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "Error reading body", http.StatusInternalServerError)
-			return
+	goPath := C.GoString(path)
+	http.HandleFunc(goPath, func(w http.ResponseWriter, r *http.Request) {
+		// Validar Content-Type solo para requests con body
+        if r.ContentLength > 0 {
+            contentType := r.Header.Get("Content-Type")
+            if !strings.HasPrefix(contentType, "application/json") {
+                // Crear respuesta de error directamente en Go
+                errorResponse := C.HttpResponse{
+                    status_code: C.int(http.StatusUnsupportedMediaType),
+                    body:        C.CString(`{"error": "Content-Type must be application/json"}`),
+                }
+                defer C.free(unsafe.Pointer(errorResponse.body))
+                
+                w.WriteHeader(int(errorResponse.status_code))
+                w.Write([]byte(C.GoString(errorResponse.body)))
+                return
+            }
+            
+            // Validar que el body sea JSON válido
+            body, err := io.ReadAll(r.Body)
+            if err != nil {
+                errorResponse := C.HttpResponse{
+                    status_code: C.int(http.StatusBadRequest),
+                    body:        C.CString(`{"error": "Error reading request body"}`),
+                }
+                defer C.free(unsafe.Pointer(errorResponse.body))
+                
+                w.WriteHeader(int(errorResponse.status_code))
+                w.Write([]byte(C.GoString(errorResponse.body)))
+                return
+            }
+            defer r.Body.Close()
+
+            if !json.Valid(body) {
+                errorResponse := C.HttpResponse{
+                    status_code: C.int(http.StatusBadRequest),
+                    body:        C.CString(`{"error": "Invalid JSON format"}`),
+                }
+                defer C.free(unsafe.Pointer(errorResponse.body))
+                
+                w.WriteHeader(int(errorResponse.status_code))
+                w.Write([]byte(C.GoString(errorResponse.body)))
+                return
+            }
+
+			authHeader := r.Header.Get("Authorization")
+			username, password, bearerToken := "", "", ""
+
+			if authHeader != "" {
+				if u, p, ok := parseBasicAuth(authHeader); ok {
+					username, password = u, p
+				} else if token, ok := parseBearerToken(authHeader); ok {
+					bearerToken = token
+				}
+			}
+
+			req := C.HttpRequest{
+				method:       C.CString(r.Method),
+				path:         C.CString(r.URL.Path),
+				body:         C.CString(string(body)),
+				client_ip:    C.CString(getClientIP(r)),
+				headers:      C.CString(getHeadersString(r)),
+				username:     C.CString(username),
+				password:     C.CString(password),
+				bearer_token: C.CString(bearerToken),
+			}
+			defer freeRequest(&req)
+
+			cResponse := C.call_handler(handler, &req)
+			defer func() {
+				C.free(unsafe.Pointer(cResponse.body))
+				C.free(unsafe.Pointer(cResponse))
+			}()
+
+			w.WriteHeader(int(cResponse.status_code))
+			w.Write([]byte(C.GoString(cResponse.body)))
 		}
-		defer r.Body.Close()
-
-		// Convertir headers a JSON
-		headersJson, err := json.Marshal(r.Header)
-		if err != nil {
-			http.Error(w, "Error marshaling headers", http.StatusInternalServerError)
-			return
-		}
-
-		if r.Header.Get("Content-Type") != "application/json" {
-			http.Error(w, "Error contentType headers", http.StatusInternalServerError)
-			return
-		}
-
-
-		// Crear request - SIN defer para los campos internos
-        creq := (*C.HttpRequest)(C.calloc(1, C.sizeof_HttpRequest))
-        creq.method = C.CString(r.Method)
-        creq.url = C.CString(r.URL.String())
-        creq.body = (*C.char)(C.CBytes(body))
-        creq.body_len = C.size_t(len(body))
-        ip := extractIP(r.RemoteAddr)
-		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		    ip = strings.TrimSpace(strings.Split(forwarded, ",")[0])
-		}
-		creq.remote_addr = C.CString(ip)
-        creq.headers = C.CString(string(headersJson))
-
-        // Crear response - SIN defer para data
-        cresp := (*C.HttpResponse)(C.calloc(1, C.sizeof_HttpResponse))
-        cresp.status_code = 200
-        cresp.content_type = C.CString("text/plain; charset=utf-8")
-
-        // Llamar al handler
-        C.callCHandler(handler, creq, cresp)
-
-
-		// Escribir respuesta
-        if cresp.content_type != nil {
-            w.Header().Set("Content-Type", C.GoString(cresp.content_type))
-        }
-        w.WriteHeader(int(cresp.status_code))
-        if cresp.data != nil {
-            w.Write([]byte(C.GoStringN(cresp.data, C.int(cresp.len))))
-        }
-
-        // Liberación ÚNICA y ORDENADA
-        C.free(unsafe.Pointer(creq.method))
-        C.free(unsafe.Pointer(creq.url))
-        C.free(unsafe.Pointer(creq.body))
-        C.free(unsafe.Pointer(creq.remote_addr))
-        C.free(unsafe.Pointer(creq.headers))
-        C.free(unsafe.Pointer(creq))
-        
-        C.free(unsafe.Pointer(cresp.content_type))
-        if cresp.data != nil {
-            C.free(unsafe.Pointer(cresp.data))
-        }
-        C.free(unsafe.Pointer(cresp))
 	})
 }
+
+// Modificar freeRequest para liberar el nuevo campo
+func freeRequest(req *C.HttpRequest) {
+	C.free(unsafe.Pointer(req.method))
+	C.free(unsafe.Pointer(req.path))
+	C.free(unsafe.Pointer(req.body))
+	C.free(unsafe.Pointer(req.client_ip))
+	C.free(unsafe.Pointer(req.headers))
+	C.free(unsafe.Pointer(req.username))
+	C.free(unsafe.Pointer(req.password))
+	C.free(unsafe.Pointer(req.bearer_token))
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//export GetMethod
+func GetMethod(req *C.HttpRequest) *C.char {
+    if req == nil {
+        return nil
+    }
+    return req.method
+}
+
+//export GetPath
+func GetPath(req *C.HttpRequest) *C.char {
+    if req == nil {
+        return nil
+    }
+    return req.path
+}
+
+//export GetBody
+func GetBody(req *C.HttpRequest) *C.char {
+    if req == nil {
+        return nil
+    }
+    return req.body
+}
+
+//export GetClientIP
+func GetClientIP(req *C.HttpRequest) *C.char {
+    if req == nil {
+        return nil
+    }
+    return req.client_ip
+}
+
+//export GetHeaders
+func GetHeaders(req *C.HttpRequest) *C.char {
+    if req == nil {
+        return nil
+    }
+    return req.headers
+}
+
+//export GetUsername
+func GetUsername(req *C.HttpRequest) *C.char {
+    if req == nil {
+        return nil
+    }
+    return req.username
+}
+
+//export GetPassword
+func GetPassword(req *C.HttpRequest) *C.char {
+    if req == nil {
+        return nil
+    }
+    return req.password
+}
+
+//export GetBearerToken
+func GetBearerToken(req *C.HttpRequest) *C.char {
+    if req == nil {
+        return nil
+    }
+    return req.bearer_token
+}
+
+
+
+
+
+
+
+
+
+
+//export CreateResponse
+func CreateResponse(statusCode C.int, body *C.char) *C.HttpResponse {
+    // Si no se proporcionan parámetros (ambos son cero/nulos)
+    if statusCode == 0 && body == nil {
+        return C.create_response()
+    }
+    return C.create_response_with_params(statusCode, body)
+}
+
+
+
+
+
+
+
+
 
 
 
@@ -366,25 +460,36 @@ func ipFilterMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-//export StartServerWithIPFilter
-func StartServerWithIPFilter(port *C.char, enableFilter C.int) {
-	portStr := C.GoString(port)
-	
-	var handler http.Handler = http.DefaultServeMux
-	if enableFilter == 1 {
-		handler = ipFilterMiddleware(handler)
-	}
-	
-	go func() {
-		server := &http.Server{
-			Addr:    ":" + portStr,
-			Handler: handler,
-		}
-		
-		if err := server.ListenAndServe(); err != nil {
-			panic(err)
-		}
-	}()
+//export StartServer
+func StartServer(port *C.char, enableFilter C.int, certFile *C.char, keyFile *C.char) {
+    portStr := C.GoString(port)
+    
+    var handler http.Handler = http.DefaultServeMux
+    if enableFilter == 1 {
+        handler = ipFilterMiddleware(handler)
+    }
+    
+    go func() {
+        server := &http.Server{
+            Addr:    ":" + portStr,
+            Handler: handler,
+        }
+        
+        // Si se proporcionan certificados, usar HTTPS
+        if certFile != nil && keyFile != nil {
+            cert := C.GoString(certFile)
+            key := C.GoString(keyFile)
+            
+            if err := server.ListenAndServeTLS(cert, key); err != nil {
+                panic("Error al iniciar servidor HTTPS: " + err.Error())
+            }
+        } else {
+            // Sin certificados, usar HTTP
+            if err := server.ListenAndServe(); err != nil {
+                panic("Error al iniciar servidor HTTP: " + err.Error())
+            }
+        }
+    }()
 }
 
 // Función auxiliar para cargar listas desde strings separados por comas
@@ -421,81 +526,6 @@ func LoadBlacklist(ips *C.char) {
 		}
 	}
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ---------------------------------------------------------------------------------------
-
-
-
-
-//export GetRequestMethod
-func GetRequestMethod(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return nil
-    }
-    return req.method
-}
-
-//export GetRequestURL
-func GetRequestURL(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return nil
-    }
-    return req.url
-}
-
-//export GetRequestBody
-func GetRequestBody(req *C.HttpRequest, length *C.size_t) *C.char {
-    if req == nil || length == nil {
-        return nil
-    }
-    *length = req.body_len
-    return req.body
-}
-
-//export GetRequestRemoteAddr
-func GetRequestRemoteAddr(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return nil
-    }
-    return req.remote_addr
-}
-
-//export GetRequestHeader
-func GetRequestHeader(req *C.HttpRequest, key *C.char) *C.char {
-    if req == nil || key == nil || req.headers == nil {
-        return nil
-    }
-    headersJson := C.GoString(req.headers)
-    var headers map[string][]string
-    if err := json.Unmarshal([]byte(headersJson), &headers); err != nil {
-        return nil
-    }
-
-    goKey := C.GoString(key)
-    if values, exists := headers[goKey]; exists && len(values) > 0 {
-        // IMPORTANTE: El caller debe liberar este string
-        return C.CString(values[0])
-    }
-    return nil
-}
-
-
-
-
-
 
 
 
@@ -686,5 +716,6 @@ func GetTokenRemainingTime(token *C.char) C.double {
     
     return -1.0 // Token no encontrado
 }
+
 
 func main() {}
