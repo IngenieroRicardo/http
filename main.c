@@ -43,8 +43,10 @@ int main() {
 
 #include <stdio.h>
 #include "http.h"
+#include <unistd.h>
 
 Response my_handler(Request req) {
+    printf("%s",GetHeaderValue(req, "demo"));
     return CreateResponse(200,"{\"status\":\"success\"}");
 }
 
@@ -55,6 +57,9 @@ int main() {
     
     // Mantener el programa en ejecución
     getchar();
+    /*while(1) {
+        sleep(1);
+    }*/
     
     return 0;
 }

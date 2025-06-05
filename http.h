@@ -130,6 +130,7 @@ extern char* GetPath(HttpRequest* req);
 extern char* GetBody(HttpRequest* req);
 extern char* GetClientIP(HttpRequest* req);
 extern char* GetHeaders(HttpRequest* req);
+extern char* GetHeaderValue(HttpRequest* req, char* key);
 extern char* GetUsername(HttpRequest* req);
 extern char* GetPassword(HttpRequest* req);
 extern char* GetBearerToken(HttpRequest* req);

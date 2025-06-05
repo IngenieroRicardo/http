@@ -281,6 +281,38 @@ func GetHeaders(req *C.HttpRequest) *C.char {
     return req.headers
 }
 
+//export GetHeaderValue
+func GetHeaderValue(req *C.HttpRequest, key *C.char) *C.char {
+    if req == nil || key == nil {
+        return nil
+    }
+
+    // Convertir el key de C a Go string
+    keyStr := C.GoString(key)
+    if keyStr == "" {
+        return nil
+    }
+
+    // Convertir los headers de C a Go string
+    headersStr := C.GoString(req.headers)
+    if headersStr == "" {
+        return nil
+    }
+
+    // Parsear los headers línea por línea
+    headers := strings.Split(headersStr, "\n")
+    for _, header := range headers {
+        parts := strings.SplitN(header, ": ", 2)
+        if len(parts) == 2 && strings.EqualFold(parts[0], keyStr) {
+            // Encontramos el header, devolver su valor
+            return C.CString(parts[1])
+        }
+    }
+
+    // Header no encontrado
+    return nil
+}
+
 //export GetUsername
 func GetUsername(req *C.HttpRequest) *C.char {
     if req == nil {
