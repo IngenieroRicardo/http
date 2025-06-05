@@ -124,6 +124,40 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
+#ifdef _WIN32 
+extern __declspec(dllexport) void RegisterHandler(char* path, HttpHandler handler);
+extern __declspec(dllexport) char* GetMethod(HttpRequest* req);
+extern __declspec(dllexport) char* GetPath(HttpRequest* req);
+extern __declspec(dllexport) char* GetBody(HttpRequest* req);
+extern __declspec(dllexport) char* GetClientIP(HttpRequest* req);
+extern __declspec(dllexport) char* GetHeaders(HttpRequest* req);
+extern __declspec(dllexport) char* GetHeaderValue(HttpRequest* req, char* key);
+extern __declspec(dllexport) char* GetUsername(HttpRequest* req);
+extern __declspec(dllexport) char* GetPassword(HttpRequest* req);
+extern __declspec(dllexport) char* GetBearerToken(HttpRequest* req);
+extern __declspec(dllexport) HttpResponse* CreateResponse(int statusCode, char* body);
+extern __declspec(dllexport) int AddToWhitelist(char* ip);
+extern __declspec(dllexport) int RemoveFromWhitelist(char* ip);
+extern __declspec(dllexport) int AddToBlacklist(char* ip);
+extern __declspec(dllexport) int RemoveFromBlacklist(char* ip);
+extern __declspec(dllexport) int IsWhitelisted(char* ip);
+extern __declspec(dllexport) int IsBlacklisted(char* ip);
+extern __declspec(dllexport) void StartServer(char* port, int enableFilter, char* certFile, char* keyFile);
+extern __declspec(dllexport) void LoadWhitelist(char* ips);
+extern __declspec(dllexport) void LoadBlacklist(char* ips);
+extern __declspec(dllexport) void SetTokenSecretKey(char* key);
+extern __declspec(dllexport) void SetDefaultTokenExpiry(int seconds);
+extern __declspec(dllexport) char* GenerateToken();
+extern __declspec(dllexport) int ValidateToken(char* token);
+extern __declspec(dllexport) void InvalidateToken(char* token);
+extern __declspec(dllexport) time_t GetTokenExpiration(char* token);
+extern __declspec(dllexport) int SetTokenExpiration(char* token, time_t expiration);
+extern __declspec(dllexport) int CleanExpiredTokens();
+extern __declspec(dllexport) TokenInfo* GetTokenInfo(char* token);
+extern __declspec(dllexport) void FreeTokenInfo(TokenInfo* info);
+extern __declspec(dllexport) int IsTokenValid(char* token);
+extern __declspec(dllexport) double GetTokenRemainingTime(char* token);
+#else
 extern void RegisterHandler(char* path, HttpHandler handler);
 extern char* GetMethod(HttpRequest* req);
 extern char* GetPath(HttpRequest* req);
@@ -142,8 +176,6 @@ extern int RemoveFromBlacklist(char* ip);
 extern int IsWhitelisted(char* ip);
 extern int IsBlacklisted(char* ip);
 extern void StartServer(char* port, int enableFilter, char* certFile, char* keyFile);
-
-// Función auxiliar para cargar listas desde strings separados por comas
 extern void LoadWhitelist(char* ips);
 extern void LoadBlacklist(char* ips);
 extern void SetTokenSecretKey(char* key);
@@ -158,6 +190,7 @@ extern TokenInfo* GetTokenInfo(char* token);
 extern void FreeTokenInfo(TokenInfo* info);
 extern int IsTokenValid(char* token);
 extern double GetTokenRemainingTime(char* token);
+#endif
 
 #ifdef __cplusplus
 }

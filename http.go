@@ -234,24 +234,6 @@ func freeRequest(req *C.HttpRequest) {
 	C.free(unsafe.Pointer(req.bearer_token))
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //export GetMethod
 func GetMethod(req *C.HttpRequest) *C.char {
     if req == nil {
@@ -319,7 +301,6 @@ func GetHeaderValue(req *C.HttpRequest, key *C.char) *C.char {
             return C.CString(parts[1])
         }
     }
-
     // Header no encontrado
     return nil
 }
@@ -348,15 +329,6 @@ func GetBearerToken(req *C.HttpRequest) *C.char {
     return req.bearer_token
 }
 
-
-
-
-
-
-
-
-
-
 //export CreateResponse
 func CreateResponse(statusCode C.int, body *C.char) *C.HttpResponse {
     // Si no se proporcionan parámetros (ambos son cero/nulos)
@@ -365,21 +337,6 @@ func CreateResponse(statusCode C.int, body *C.char) *C.HttpResponse {
     }
     return C.create_response_with_params(statusCode, body)
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // ListManager gestiona las listas de IPs
 type ListManager struct {
@@ -392,8 +349,6 @@ var ipListManager = &ListManager{
 	whitelist: make(map[string]bool),
 	blacklist: make(map[string]bool),
 }
-
-// ---------- Funciones de gestión de listas ----------
 
 //export AddToWhitelist
 func AddToWhitelist(ip *C.char) C.int {
@@ -535,7 +490,6 @@ func StartServer(port *C.char, enableFilter C.int, certFile *C.char, keyFile *C.
     }()
 }
 
-// Función auxiliar para cargar listas desde strings separados por comas
 //export LoadWhitelist
 func LoadWhitelist(ips *C.char) {
 	ipStr := C.GoString(ips)
@@ -570,17 +524,6 @@ func LoadBlacklist(ips *C.char) {
 	}
 }
 
-
-
-
-
-
-
-
-
-
-
-
 // TokenManager gestiona tokens de autenticación
 type TokenManager struct {
 	tokens      map[string]time.Time // token -> expiration time
@@ -594,8 +537,6 @@ var tokenManager = &TokenManager{
 	secretKey: "default-secret-key", // Cambiar en producción
 	tokenExpiry: 24 * time.Hour,    // 24 horas por defecto
 }
-
-// ---------- Funciones de gestión de tokens ----------
 
 //export SetTokenSecretKey
 func SetTokenSecretKey(key *C.char) {
@@ -615,7 +556,6 @@ func SetDefaultTokenExpiry(seconds C.int) {
 func GenerateToken() *C.char {
 	tokenManager.mu.Lock()
 	defer tokenManager.mu.Unlock()
-	
 	// Generar un token único (en producción usar un método más seguro)
 	token := fmt.Sprintf("%x-%x-%x", 
 		time.Now().UnixNano(), 
