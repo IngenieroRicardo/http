@@ -1,6 +1,6 @@
 # HTTP
 Libreria C para crear WebService JSON.  
-Compilada usando: `go build -o HTTP.dll -buildmode=c-shared HTTP.go`
+Compilada usando: `go build -o http.dll -buildmode=c-shared http.go`
 
 ---
 
@@ -8,8 +8,8 @@ Compilada usando: `go build -o HTTP.dll -buildmode=c-shared HTTP.go`
 
 | Linux | Windows |
 | --- | --- |
-| `wget https://github.com/IngenieroRicardo/HTTP/releases/download/1.0/HTTP.so` | `Invoke-WebRequest https://github.com/IngenieroRicardo/HTTP/releases/download/1.0/HTTP.dll -OutFile ./HTTP.dll` |
-| `wget https://github.com/IngenieroRicardo/HTTP/releases/download/1.0/HTTP.h` | `Invoke-WebRequest https://github.com/IngenieroRicardo/HTTP/releases/download/1.0/HTTP.h -OutFile ./HTTP.h` |
+| `wget https://github.com/IngenieroRicardo/http/releases/download/1.0/http.so` | `Invoke-WebRequest https://github.com/IngenieroRicardo/http/releases/download/1.0/http.dll -OutFile ./http.dll` |
+| `wget https://github.com/IngenieroRicardo/http/releases/download/1.0/http.h` | `Invoke-WebRequest https://github.com/IngenieroRicardo/http/releases/download/1.0/http.h -OutFile ./http.h` |
 
 ---
 
@@ -17,8 +17,8 @@ Compilada usando: `go build -o HTTP.dll -buildmode=c-shared HTTP.go`
 
 | Linux | Windows |
 | --- | --- |
-| `gcc -o main.bin main.c ./HTTP.so` | `gcc -o main.exe main.c ./HTTP.dll` |
-| `x86_64-w64-mingw32-gcc -o main.exe main.c ./HTTP.dll` |  |
+| `gcc -o main.bin main.c ./http.so` | `gcc -o main.exe main.c ./http.dll` |
+| `x86_64-w64-mingw32-gcc -o main.exe main.c ./http.dll` |  |
 
 ---
 
@@ -27,7 +27,7 @@ Compilada usando: `go build -o HTTP.dll -buildmode=c-shared HTTP.go`
 ```C
 #include <stdio.h>
 #include <unistd.h>
-#include "HTTP.h"
+#include "http.h"
 
 Response basic_handler(Request req) {
     char* method = GetMethod(req);
@@ -47,41 +47,10 @@ int main() {
     
     // Iniciar el servidor en el puerto 8080 sin filtro de IP
     StartServer("8080", 0, NULL, NULL);
+    // Iniciar servidor HTTPS con certificados
+    //StartServer("443", 0, "./server.crt", "./server.key");
     
     // Mantener el programa en ejecución
-    while(1) {
-        sleep(1);
-    }
-    
-    return 0;
-}
-```
-
----
-
-### 🧪 Ejemplo de Autenticacion Basica
-
-```C
-#include <stdio.h>
-#include <unistd.h>
-#include "HTTP.h"
-
-Response auth_handler(Request req) {
-    char* username = GetUsername(req);
-    char* password = GetPassword(req);
-    
-    // Verificación simple de credenciales (en producción usar algo más seguro)
-    if (strcmp(username, "admin") == 0 && strcmp(password, "secret") == 0) {
-        return CreateResponse(200, "{\"message\":\"Bienvenido admin!\"}");
-    }
-    
-    return CreateResponse(403, "{\"error\":\"Invalid credentials\"}");
-}
-
-int main() {
-    RegisterHandler("/seguro", auth_handler);
-    StartServer("8080", 0, NULL, NULL);
-    
     while(1) {
         sleep(1);
     }
@@ -99,7 +68,7 @@ int main() {
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include "HTTP.h"
+#include "http.h"
 
 Response token_handler(Request req) {
     char* token = GetBearerToken(req);
@@ -110,7 +79,6 @@ Response token_handler(Request req) {
     } else {
         return CreateResponse(403, "{\"error\":\"Invalid token\"}");
     }
-    
     
 }
 
@@ -163,7 +131,7 @@ int main() {
 ```C
 #include <stdio.h>
 #include <unistd.h>
-#include "HTTP.h"
+#include "http.h"
 
 Response ip_check_handler(Request req) {
     char* client_ip = GetClientIP(req);
@@ -189,33 +157,6 @@ int main() {
     
     // Iniciar servidor con filtro de IP habilitado
     StartServer("8080", 1, NULL, NULL);
-    
-    while(1) {
-        sleep(1);
-    }
-    
-    return 0;
-}
-```
-
----
-
-### 🧪 Ejemplo usando HTTPS con certificados
-
-```C
-#include <stdio.h>
-#include <unistd.h>
-#include "HTTP.h"
-
-Response secure_handler(Request req) {
-    return CreateResponse(200, "{\"message\":\"Secure connection established\"}");
-}
-
-int main() {
-    RegisterHandler("/secure-data", secure_handler);
-    
-    // Iniciar servidor HTTPS con certificados
-    StartServer("443", 0, "server.crt", "server.key");
     
     while(1) {
         sleep(1);
