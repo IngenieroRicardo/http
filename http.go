@@ -3,6 +3,7 @@ package main
 /*
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // Estructura para tokens
 typedef struct {
