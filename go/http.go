@@ -125,6 +125,17 @@ func getClientIP(r *http.Request) string {
 	return ""
 }
 
+// GetHeaderValue gets a header value by name from the Headers string
+func (req *HttpRequest) GetHeaderValue(name string) string {
+	headers := strings.Split(req.Headers, "\n")
+	for _, header := range headers {
+		if strings.HasPrefix(header, name+":") {
+			return strings.TrimSpace(strings.TrimPrefix(header, name+":"))
+		}
+	}
+	return ""
+}
+
 // getHeadersString convierte los headers a string
 func getHeadersString(r *http.Request) string {
 	var sb strings.Builder
@@ -212,6 +223,21 @@ func (s *Server) RegisterHandler(path string, handler HttpHandler) {
 			w.Write([]byte(response.Body))
 		}
 	})
+}
+
+func CreateResponse(statusCode int, body string) *HttpResponse {
+    // Si no se proporcionan parámetros (valores cero)
+    if statusCode == 0 && body == "" {
+        return &HttpResponse{
+            StatusCode: 200,  // Valor por defecto
+            Body:       "",   // Cuerpo vacío
+        }
+    }
+    
+    return &HttpResponse{
+        StatusCode: statusCode,
+        Body:       body,
+    }
 }
 
 // IP List Management
