@@ -136,6 +136,18 @@ func (req *HttpRequest) GetHeaderValue(name string) string {
 	return ""
 }
 
+func (req *HttpRequest) GetMethod() string {
+	return req.Method
+}
+
+func (req *HttpRequest) GetPath() string {
+	return req.Path
+}
+
+func (req *HttpRequest) GetBody() string {
+	return req.Body
+}
+
 // getHeadersString convierte los headers a string
 func getHeadersString(r *http.Request) string {
 	var sb strings.Builder
