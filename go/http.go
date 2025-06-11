@@ -246,22 +246,22 @@ func (r *HttpRequest) GetHeaders() string {
     return r.Headers
 }
 
-func (r *HttpRequest) GetHeaderValue(key string) (string, bool) {
+func (r *HttpRequest) GetHeaderValue(key string) string {
     // Parsear los headers del JSON almacenado en Headers
     var headers map[string][]string
     err := json.Unmarshal([]byte(r.Headers), &headers)
     if err != nil {
-        return "", false
+        return ""
     }
 
     // Buscar el header (case-insensitive)
     key = strings.ToLower(key)
     for name, values := range headers {
         if strings.ToLower(name) == key && len(values) > 0 {
-            return values[0], true
+            return values[0]
         }
     }
-    return "", false
+    return ""
 }
 
 func (r *HttpRequest) GetUsername() string {
