@@ -128,29 +128,34 @@ func StartServer(port string, enableFilter int, certFile string, keyFile string)
 		var body []byte
 		var err error
 
-		if r.ContentLength > 0 && r.Method != http.MethodGet && r.Method != http.MethodHead {
-			// Validar Content-Type
-			contentType := r.Header.Get("Content-Type")
-			if !strings.HasPrefix(contentType, "application/json") {
-				sendErrorResponse(w, http.StatusUnsupportedMediaType,
-					"Content-Type must be application/json")
-				return
-			}
+		if r.ContentLength > 0 {
+		    // Validar Content-Type solo para métodos que usualmente llevan body
+		    if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		        contentType := r.Header.Get("Content-Type")
+		        if !strings.HasPrefix(contentType, "application/json") {
+		            sendErrorResponse(w, http.StatusUnsupportedMediaType,
+		                "Content-Type must be application/json")
+		            return
+		        }
+		    }
 
-			// Leer body
-			body, err = io.ReadAll(r.Body)
-			if err != nil {
-				sendErrorResponse(w, http.StatusBadRequest,
-					"Error reading request body")
-				return
-			}
-			defer r.Body.Close()
+		    // Leer body
+		    body, err = io.ReadAll(r.Body)
+		    if err != nil {
+		        sendErrorResponse(w, http.StatusBadRequest,
+		            "Error reading request body")
+		        return
+		    }
+		    defer r.Body.Close()
 
-			if !json.Valid(body) {
-				sendErrorResponse(w, http.StatusBadRequest,
-					"Invalid JSON format")
-				return
-			}
+		    // Verificar JSON solo si hay contenido y es requerido
+		    if len(body) > 0 && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		        if !json.Valid(body) {
+		            sendErrorResponse(w, http.StatusBadRequest,
+		                "Invalid JSON format")
+		            return
+		        }
+		    }
 		}
 
 		// Procesar autenticación
