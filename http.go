@@ -140,30 +140,32 @@ func RegisterHandler(path *C.char, handler C.HttpHandler) {
         var body []byte
         var err error
         
-        if r.ContentLength > 0 && r.Method != http.MethodGet && r.Method != http.MethodHead {
-            // Validar Content-Type
-            contentType := r.Header.Get("Content-Type")
-            if !strings.HasPrefix(contentType, "application/json") {
-                sendErrorResponse(w, http.StatusUnsupportedMediaType, 
-                    "Content-Type must be application/json")
-                return
-            }
-            
-            // Leer y validar body
-            body, err = io.ReadAll(r.Body)
-            if err != nil {
-                sendErrorResponse(w, http.StatusBadRequest, 
-                    "Error reading request body")
-                return
-            }
-            defer r.Body.Close()
+        if r.ContentLength > 0 {
+		    // Leer el body sin validar para GET/HEAD
+		    body, err = io.ReadAll(r.Body)
+		    if err != nil {
+		        sendErrorResponse(w, http.StatusBadRequest, 
+		            "Error reading request body")
+		        return
+		    }
+		    defer r.Body.Close()
 
-            if !json.Valid(body) {
-                sendErrorResponse(w, http.StatusBadRequest, 
-                    "Invalid JSON format")
-                return
-            }
-        }
+		    // Validar JSON solo para métodos que no sean GET/HEAD
+		    if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		        contentType := r.Header.Get("Content-Type")
+		        if !strings.HasPrefix(contentType, "application/json") {
+		            sendErrorResponse(w, http.StatusUnsupportedMediaType, 
+		                "Content-Type must be application/json")
+		            return
+		        }
+		        
+		        if !json.Valid(body) {
+		            sendErrorResponse(w, http.StatusBadRequest, 
+		                "Invalid JSON format")
+		            return
+		        }
+		    }
+		}
 
         // Procesar autenticación
         authHeader := r.Header.Get("Authorization")
