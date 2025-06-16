@@ -3,14 +3,11 @@ package http
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 )
 
 // HttpRequest representa una petición HTTP (similar a la versión C)
