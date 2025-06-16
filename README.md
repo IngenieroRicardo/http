@@ -83,54 +83,28 @@ int main() {
 
 ```C
 #include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
 #include <unistd.h>
 #include "http.h"
 
 Response token_handler(Request req) {
-    char* token = GetBearerToken(req);
-    
-    int token_status = ValidateToken(token);
-    if (token_status == 1) {
+    if (strcmp(GetBearerToken(req), "123") == 0) {
         return CreateResponse(200, "{\"message\":\"Valid token\"}");
     } else {
         return CreateResponse(403, "{\"error\":\"Invalid token\"}");
     }
-    
 }
 
 Response login_handler(Request req) {
-    char* username = GetUsername(req);
-    char* password = GetPassword(req);
-    
-    // Verificación de credenciales (simplificada)
-    if (strcmp(username, "admin") == 0 && strcmp(password, "secret") == 0) {
-        // Generar nuevo token
-        char* token = GenerateToken();
-        
-        // Crear el JSON de respuesta manualmente
-        char* response_body = malloc(strlen(token) + 20); // Espacio suficiente
-        sprintf(response_body, "{\"token\":\"%s\"}", token);
-        
-        Response res = CreateResponse(200, response_body);
-        
-        // Liberar memoria
-        free(response_body);
-        free(token);
-        return res;
+    if (strcmp(GetUsername(req), "admin") == 0 && strcmp(GetPassword(req), "secret") == 0) {
+        CreateResponse(200, "{\"token\":\"123\"}");
+    } else {
+        return CreateResponse(401, "{\"error\":\"Invalid credentials\"}");
     }
-    
-    return CreateResponse(401, "{\"error\":\"Invalid credentials\"}");
 }
 
 int main() {
-    // Configurar duración del token (1 hora)
-    SetDefaultTokenExpiry(3600);
-    
     RegisterHandler("/api/login", login_handler);
     RegisterHandler("/api/protected", token_handler);
-    
     StartServer("8080", 0, NULL, NULL);
     
     while(1) {
@@ -139,7 +113,6 @@ int main() {
     
     return 0;
 }
-
 ```
 
 ---
