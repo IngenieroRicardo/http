@@ -5,12 +5,6 @@ package main
 #include <string.h>
 #include <time.h>
 
-// Estructura para tokens
-typedef struct {
-    char* token;
-    time_t expiration;
-} TokenInfo;
-
 typedef struct {
     const char* method;
     const char* path;
@@ -31,6 +25,17 @@ typedef HttpRequest* Request;
 typedef HttpResponse* Response;
 
 typedef Response (*HttpHandler)(Request req);
+
+// Nueva función para liberar respuestas
+static inline void FreeResponse(Response res) {
+    if (res == NULL) return;
+    
+    if (res->body != NULL) {
+        free((void*)res->body);
+    }
+    
+    free(res);
+}
 
 static inline Response call_handler(HttpHandler handler, Request req) {
     return handler(req);
@@ -59,9 +64,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"sync"
-	"time"
-	"math/rand"
-	"fmt"
 )
 
 // Función para extraer username y password del header Authorization
@@ -129,91 +131,74 @@ func getHeadersString(r *http.Request) string {
 	return sb.String()
 }
 
+// Implementar un pool de memoria para requests
+var requestPool = sync.Pool{
+    New: func() interface{} {
+        return &C.HttpRequest{}
+    },
+}
+
 //export RegisterHandler
 func RegisterHandler(path *C.char, handler C.HttpHandler) {
     goPath := C.GoString(path)
     http.HandleFunc(goPath, func(w http.ResponseWriter, r *http.Request) {
-        // Configurar content-type por defecto para todas las respuestas
         w.Header().Set("Content-Type", "application/json")
 
-        // Manejar el body solo para métodos que pueden tenerlo
-        var body []byte
-        var err error
-        
-        if r.ContentLength > 0 {
-		    // Leer el body sin validar para GET/HEAD
-		    body, err = io.ReadAll(r.Body)
-		    if err != nil {
-		        sendErrorResponse(w, http.StatusBadRequest, 
-		            "Error reading request body")
-		        return
-		    }
-		    defer r.Body.Close()
+        // Obtener request del pool
+        req := requestPool.Get().(*C.HttpRequest)
+        defer requestPool.Put(req)
+   
 
-		    // Validar JSON solo para métodos que no sean GET/HEAD
-		    if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		        contentType := r.Header.Get("Content-Type")
-		        if !strings.HasPrefix(contentType, "application/json") {
-		            sendErrorResponse(w, http.StatusUnsupportedMediaType, 
-		                "Content-Type must be application/json")
-		            return
-		        }
-		        
-		        if !json.Valid(body) {
-		            sendErrorResponse(w, http.StatusBadRequest, 
-		                "Invalid JSON format")
-		            return
-		        }
-		    }
-		}
+        // Resetear los campos del request
+        *req = C.HttpRequest{} // Limpiar la estructura
+
+        // Configurar campos del request
+        req.method = C.CString(r.Method)
+        req.path = C.CString(r.URL.Path)
+        req.client_ip = C.CString(getClientIP(r))
+        req.headers = C.CString(getHeadersString(r))
+
+        // Manejo del body con tamaño máximo
+        if r.ContentLength > 0 && r.ContentLength < 10*1024*1024 { // 10MB máximo
+            body, _ := io.ReadAll(r.Body)
+            r.Body.Close()
+            req.body = C.CString(string(body))
+        } else {
+        	req.body = C.CString("")
+        }
 
         // Procesar autenticación
-        authHeader := r.Header.Get("Authorization")
-        username, password, bearerToken := "", "", ""
-
-        if authHeader != "" {
+        if authHeader := r.Header.Get("Authorization"); authHeader != "" {
             if u, p, ok := parseBasicAuth(authHeader); ok {
-                username, password = u, p
-            } else if token, ok := parseBearerToken(authHeader); ok {
-                bearerToken = token
+                req.username = C.CString(u)
+                req.password = C.CString(p)
+            } else {
+            	req.username = C.CString("")
+                req.password = C.CString("")
+            }
+            if token, ok := parseBearerToken(authHeader); ok {
+                req.bearer_token = C.CString(token)
+            } else {
+            	req.bearer_token = C.CString("")
             }
         }
-
-        // Crear request para el handler C
-        req := C.HttpRequest{
-            method:       C.CString(r.Method),
-            path:         C.CString(r.URL.Path),
-            body:         C.CString(string(body)),
-            client_ip:    C.CString(getClientIP(r)),
-            headers:      C.CString(getHeadersString(r)),
-            username:     C.CString(username),
-            password:     C.CString(password),
-            bearer_token: C.CString(bearerToken),
-        }
-        defer freeRequest(&req)
 
         // Llamar al handler C
-        cResponse := C.call_handler(handler, &req)
-        defer func() {
-            if cResponse != nil {
-                if cResponse.body != nil {
-                    C.free(unsafe.Pointer(cResponse.body))
-                }
-                C.free(unsafe.Pointer(cResponse))
-            }
-        }()
+        cResponse := C.call_handler(handler, req)
+        defer C.FreeResponse(cResponse) // Usar nueva función de liberación
 
         // Manejar respuesta
-        if cResponse == nil {
-            sendErrorResponse(w, http.StatusInternalServerError, 
-                "Handler returned nil response")
-            return
+        if cResponse != nil {
+            w.WriteHeader(int(cResponse.status_code))
+            if cResponse.body != nil {
+                w.Write([]byte(C.GoString(cResponse.body)))
+            }
+        } else {
+            sendErrorResponse(w, http.StatusInternalServerError, "Handler returned nil response")
         }
 
-        w.WriteHeader(int(cResponse.status_code))
-        if cResponse.body != nil {
-            w.Write([]byte(C.GoString(cResponse.body)))
-        }
+        // Liberar strings C (optimizado)
+        freeRequest(req)
     })
 }
 
@@ -236,81 +221,70 @@ func freeRequest(req *C.HttpRequest) {
 	C.free(unsafe.Pointer(req.bearer_token))
 }
 
+//export GetHeaderValue
+func GetHeaderValue(req *C.HttpRequest, key *C.char) *C.char {
+    if req == nil || key == nil || req.headers == nil {
+        return nil
+    }
+
+    keyStr := C.GoString(key)
+    headersStr := C.GoString(req.headers)
+    headers := strings.Split(headersStr, "\n")
+
+    for _, header := range headers {
+        parts := strings.SplitN(header, ": ", 2)
+        if len(parts) == 2 && strings.EqualFold(parts[0], keyStr) {
+            return C.CString(parts[1]) // Solo esta copia es suficiente
+        }
+    }
+    return nil
+}
+
 //export GetMethod
 func GetMethod(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return nil
+    if req == nil || req.method == nil {
+        return C.CString("")
     }
     return req.method
 }
 
 //export GetPath
 func GetPath(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return nil
+    if req == nil || req.path == nil {
+        return C.CString("")
     }
     return req.path
 }
 
 //export GetBody
 func GetBody(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return nil
+    if req == nil || req.path == nil {
+        return C.CString("")
     }
     return req.body
 }
 
 //export GetClientIP
 func GetClientIP(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return nil
+    if req == nil || req.path == nil {
+        return C.CString("")
     }
     return req.client_ip
 }
 
+
 //export GetHeaders
 func GetHeaders(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return nil
+    if req == nil || req.path == nil {
+        return C.CString("")
     }
     return req.headers
-}
-
-//export GetHeaderValue
-func GetHeaderValue(req *C.HttpRequest, key *C.char) *C.char {
-    if req == nil || key == nil {
-        return nil
-    }
-
-    // Convertir el key de C a Go string
-    keyStr := C.GoString(key)
-    if keyStr == "" {
-        return nil
-    }
-
-    // Convertir los headers de C a Go string
-    headersStr := C.GoString(req.headers)
-    if headersStr == "" {
-        return nil
-    }
-
-    // Parsear los headers línea por línea
-    headers := strings.Split(headersStr, "\n")
-    for _, header := range headers {
-        parts := strings.SplitN(header, ": ", 2)
-        if len(parts) == 2 && strings.EqualFold(parts[0], keyStr) {
-            // Encontramos el header, devolver su valor
-            return C.CString(parts[1])
-        }
-    }
-    // Header no encontrado
-    return nil
 }
 
 //export GetUsername
 func GetUsername(req *C.HttpRequest) *C.char {
     if req == nil {
-        return nil
+        return C.CString("")
     }
     return req.username
 }
@@ -318,7 +292,7 @@ func GetUsername(req *C.HttpRequest) *C.char {
 //export GetPassword
 func GetPassword(req *C.HttpRequest) *C.char {
     if req == nil {
-        return nil
+        return C.CString("")
     }
     return req.password
 }
@@ -326,18 +300,58 @@ func GetPassword(req *C.HttpRequest) *C.char {
 //export GetBearerToken
 func GetBearerToken(req *C.HttpRequest) *C.char {
     if req == nil {
-        return nil
+        return C.CString("")
     }
     return req.bearer_token
 }
 
 //export CreateResponse
 func CreateResponse(statusCode C.int, body *C.char) *C.HttpResponse {
-    // Si no se proporcionan parámetros (ambos son cero/nulos)
-    if statusCode == 0 && body == nil {
-        return C.create_response()
+    res := (*C.HttpResponse)(C.malloc(C.sizeof_HttpResponse))
+    if res == nil {
+        return nil
     }
-    return C.create_response_with_params(statusCode, body)
+    
+    res.status_code = statusCode
+    res.body = nil
+    
+    if body != nil {
+        res.body = C.strdup(body) // Copia que debe ser liberada
+    }
+    
+    return res
+}
+
+//export StartServer
+func StartServer(port *C.char, enableFilter C.int, certFile *C.char, keyFile *C.char) {
+    portStr := C.GoString(port)
+    
+    var handler http.Handler = http.DefaultServeMux
+    if enableFilter == 1 {
+        handler = ipFilterMiddleware(handler)
+    }
+    
+    go func() {
+        server := &http.Server{
+            Addr:    ":" + portStr,
+            Handler: handler,
+        }
+        
+        // Si se proporcionan certificados, usar HTTPS
+        if certFile != nil && keyFile != nil {
+            cert := C.GoString(certFile)
+            key := C.GoString(keyFile)
+            
+            if err := server.ListenAndServeTLS(cert, key); err != nil {
+                panic("Error al iniciar servidor HTTPS: " + err.Error())
+            }
+        } else {
+            // Sin certificados, usar HTTP
+            if err := server.ListenAndServe(); err != nil {
+                panic("Error al iniciar servidor HTTP: " + err.Error())
+            }
+        }
+    }()
 }
 
 // ListManager gestiona las listas de IPs
@@ -460,38 +474,6 @@ func ipFilterMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-//export StartServer
-func StartServer(port *C.char, enableFilter C.int, certFile *C.char, keyFile *C.char) {
-    portStr := C.GoString(port)
-    
-    var handler http.Handler = http.DefaultServeMux
-    if enableFilter == 1 {
-        handler = ipFilterMiddleware(handler)
-    }
-    
-    go func() {
-        server := &http.Server{
-            Addr:    ":" + portStr,
-            Handler: handler,
-        }
-        
-        // Si se proporcionan certificados, usar HTTPS
-        if certFile != nil && keyFile != nil {
-            cert := C.GoString(certFile)
-            key := C.GoString(keyFile)
-            
-            if err := server.ListenAndServeTLS(cert, key); err != nil {
-                panic("Error al iniciar servidor HTTPS: " + err.Error())
-            }
-        } else {
-            // Sin certificados, usar HTTP
-            if err := server.ListenAndServe(); err != nil {
-                panic("Error al iniciar servidor HTTP: " + err.Error())
-            }
-        }
-    }()
-}
-
 //export LoadWhitelist
 func LoadWhitelist(ips *C.char) {
 	ipStr := C.GoString(ips)
@@ -525,182 +507,5 @@ func LoadBlacklist(ips *C.char) {
 		}
 	}
 }
-
-// TokenManager gestiona tokens de autenticación
-type TokenManager struct {
-	tokens      map[string]time.Time // token -> expiration time
-	secretKey   string               // clave secreta para validación (opcional)
-	mu          sync.RWMutex
-	tokenExpiry time.Duration       // duración por defecto de los tokens
-}
-
-var tokenManager = &TokenManager{
-	tokens:    make(map[string]time.Time),
-	secretKey: "default-secret-key", // Cambiar en producción
-	tokenExpiry: 24 * time.Hour,    // 24 horas por defecto
-}
-
-//export SetTokenSecretKey
-func SetTokenSecretKey(key *C.char) {
-	tokenManager.mu.Lock()
-	defer tokenManager.mu.Unlock()
-	tokenManager.secretKey = C.GoString(key)
-}
-
-//export SetDefaultTokenExpiry
-func SetDefaultTokenExpiry(seconds C.int) {
-	tokenManager.mu.Lock()
-	defer tokenManager.mu.Unlock()
-	tokenManager.tokenExpiry = time.Duration(seconds) * time.Second
-}
-
-//export GenerateToken
-func GenerateToken() *C.char {
-	tokenManager.mu.Lock()
-	defer tokenManager.mu.Unlock()
-	// Generar un token único (en producción usar un método más seguro)
-	token := fmt.Sprintf("%x-%x-%x", 
-		time.Now().UnixNano(), 
-		rand.Int63(), 
-		rand.Int63())
-	
-	expiration := time.Now().Add(tokenManager.tokenExpiry)
-	tokenManager.tokens[token] = expiration
-	
-	return C.CString(token)
-}
-
-//export ValidateToken
-func ValidateToken(token *C.char) C.int {
-    tokenStr := C.GoString(token)
-    
-    tokenManager.mu.RLock()
-    defer tokenManager.mu.RUnlock()
-    
-    expiration, exists := tokenManager.tokens[tokenStr]
-    if !exists {
-        return 0 // Token no existe
-    }
-    
-    if time.Now().After(expiration) {
-        return -1 // Token expirado
-    }
-    
-    // Token válido, calcular margen adicional (1ms) para evitar falsos positivos
-    if time.Until(expiration) <= time.Millisecond {
-        return 0 // Considerar como expirado si está muy cerca
-    }
-    
-    return 1 // Token válido
-}
-
-//export InvalidateToken
-func InvalidateToken(token *C.char) {
-	tokenStr := C.GoString(token)
-	
-	tokenManager.mu.Lock()
-	defer tokenManager.mu.Unlock()
-	
-	delete(tokenManager.tokens, tokenStr)
-}
-
-//export GetTokenExpiration
-func GetTokenExpiration(token *C.char) C.time_t {
-	tokenStr := C.GoString(token)
-	
-	tokenManager.mu.RLock()
-	defer tokenManager.mu.RUnlock()
-	
-	if expiration, exists := tokenManager.tokens[tokenStr]; exists {
-		return C.time_t(expiration.Unix())
-	}
-	
-	return 0
-}
-
-//export SetTokenExpiration
-func SetTokenExpiration(token *C.char, expiration C.time_t) C.int {
-	tokenStr := C.GoString(token)
-	expTime := time.Unix(int64(expiration), 0)
-	
-	tokenManager.mu.Lock()
-	defer tokenManager.mu.Unlock()
-	
-	if _, exists := tokenManager.tokens[tokenStr]; exists {
-		tokenManager.tokens[tokenStr] = expTime
-		return 1
-	}
-	
-	return 0
-}
-
-//export CleanExpiredTokens
-func CleanExpiredTokens() C.int {
-	tokenManager.mu.Lock()
-	defer tokenManager.mu.Unlock()
-	
-	count := 0
-	now := time.Now()
-	
-	for token, expiration := range tokenManager.tokens {
-		if now.After(expiration) {
-			delete(tokenManager.tokens, token)
-			count++
-		}
-	}
-	
-	return C.int(count)
-}
-
-//export GetTokenInfo
-func GetTokenInfo(token *C.char) *C.TokenInfo {
-	tokenStr := C.GoString(token)
-	
-	tokenManager.mu.RLock()
-	defer tokenManager.mu.RUnlock()
-	
-	if expiration, exists := tokenManager.tokens[tokenStr]; exists {
-		cToken := C.CString(tokenStr)
-		cInfo := &C.TokenInfo{
-			token:      cToken,
-			expiration: C.time_t(expiration.Unix()),
-		}
-		// Nota: La memoria de cToken debe ser liberada por el llamador
-		return cInfo
-	}
-	
-	return nil
-}
-
-//export FreeTokenInfo
-func FreeTokenInfo(info *C.TokenInfo) {
-	if info == nil {
-		return
-	}
-	
-	C.free(unsafe.Pointer(info.token))
-	C.free(unsafe.Pointer(info))
-}
-
-//export IsTokenValid
-func IsTokenValid(token *C.char) C.int {
-    return ValidateToken(token)
-}
-
-//export GetTokenRemainingTime
-func GetTokenRemainingTime(token *C.char) C.double {
-    tokenStr := C.GoString(token)
-    
-    tokenManager.mu.RLock()
-    defer tokenManager.mu.RUnlock()
-    
-    if expiration, exists := tokenManager.tokens[tokenStr]; exists {
-        remaining := time.Until(expiration).Seconds()
-        return C.double(remaining)
-    }
-    
-    return -1.0 // Token no encontrado
-}
-
 
 func main() {}
