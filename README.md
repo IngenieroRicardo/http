@@ -30,31 +30,49 @@ Compilada usando: `go build -o http.dll -buildmode=c-shared http.go`
 #include "http.h"
 
 Response basic_handler(Request req) {
-    char* method = GetMethod(req);
+    char* username = GetUsername(req);
+    char* password = GetPassword(req);
+    char* token = GetBearerToken(req);
     char* path = GetPath(req);
+    char* method = GetMethod(req);
+    char* ip = GetClientIP(req);
     char* user_agent = GetHeaderValue(req, "User-Agent");
     char* body = GetBody(req);
 
-    printf("\nreceived: %s %s %s\n %s\n", method, path, user_agent, body);
-    
-    // Crear una respuesta simple
-    return CreateResponse(200, "{\"message\":\"Hola Mundo C handler!\"}");
+    printf("------------ HEADER ------------\n");
+    printf("User: %s\n", username);
+    printf("Password: %s\n", password);
+    printf("Token: %s\n", token);
+    printf("Path: %s\n", path);
+    printf("Método: %s\n", method);
+    printf("IP Cliente: %s\n", ip);
+    printf("User Agent: %s\n", user_agent);
+    printf("------------ BODY -------------\n");
+    printf("%s\n", body);
+
+    char* respuesta = "{\"mensaje\": \"Hola desde C!\"}";
+
+    //las que se obtienen con GetHeaderValue se deben liberar
+    free(user_agent);
+
+    return CreateResponse(200, respuesta);
 }
 
 int main() {
-    // Registrar un manejador para la ruta "/hola"
+    // Registrar el handler en la ruta /hola
     RegisterHandler("/hola", basic_handler);
-    
-    // Iniciar el servidor en el puerto 8080 sin filtro de IP
+
+    // Iniciar el servidor en el puerto 5000 sin TLS y sin filtro de IP
     StartServer("8080", 0, NULL, NULL);
     // Iniciar servidor HTTPS con certificados
     //StartServer("443", 0, "./server.crt", "./server.key");
-    
+
     // Mantener el programa en ejecución
-    while(1) {
+    printf("Servidor escuchando en http://localhost:5000\n");
+    while (1) {
         sleep(1);
     }
-    
+
     return 0;
 }
 ```
@@ -194,13 +212,3 @@ int main() {
 - `int IsBlacklisted(char* ip)`
 - `void LoadWhitelist(char* ips)`: Cargar lista de IPs separadas por comas
 - `void LoadBlacklist(char* ips)`: Cargar lista de IPs separadas por comas
-
-#### Gestión de Tokens
-- `char* GenerateToken()`: Crear nuevo token
-- `int ValidateToken(char* token)`: Validar token (1=válido, 0=inválido, -1=expirado)
-- `void InvalidateToken(char* token)`: Invalidar token
-- `void SetTokenSecretKey(char* key)`: Establecer clave secreta para tokens
-- `void SetDefaultTokenExpiry(int seconds)`: Establecer TTL por defecto
-- `char* GenerateToken()`: Obtener info del token (recordar usar FreeTokenInfo)
-- `void FreeTokenInfo(TokenInfo* info)`: Liberar memoria de la info del token
-- `int CleanExpiredTokens()`: Eliminar tokens expirados
