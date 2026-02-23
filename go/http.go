@@ -28,6 +28,7 @@ type HttpRequest struct {
 	Username    string
 	Password    string
 	BearerToken string
+	Host        string
 }
 
 // HttpResponse representa una respuesta HTTP (similar a la versión C)
@@ -273,6 +274,7 @@ func StartServer(port string, enableFilter int, certFile string, keyFile string)
 
 		// Crear request para el handler
 		req := HttpRequest{
+			Host:        r.Host,
 			Method:      r.Method,
 			Path:        r.URL.Path,
 			Body:        string(body),
@@ -330,6 +332,10 @@ func RegisterHandler(path string, handler HttpHandler) {
 func sendErrorResponse(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func (r *HttpRequest) GetHost() string {
+	return r.Host
 }
 
 func (r *HttpRequest) GetMethod() string {
