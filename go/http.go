@@ -1,3 +1,7 @@
+// file http.go
+
+// +build !js
+
 package http
 
 import (
