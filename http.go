@@ -1,3 +1,7 @@
+// file http.go
+
+// +build !js
+
 package main
 
 /*
@@ -14,6 +18,7 @@ typedef struct {
     const char* username;
     const char* password;
     const char* bearer_token;
+    const char* host;
 } HttpRequest;
 
 typedef struct {
@@ -26,14 +31,11 @@ typedef HttpResponse* Response;
 
 typedef Response (*HttpHandler)(Request req);
 
-// Nueva función para liberar respuestas
 static inline void FreeResponse(Response res) {
     if (res == NULL) return;
-    
     if (res->body != NULL) {
         free((void*)res->body);
     }
-    
     free(res);
 }
 
@@ -56,160 +58,158 @@ static inline Response create_response() {
 */
 import "C"
 import (
-	"io"
-	"net/http"
-	"strings"
-	"unsafe"
-	"net"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strings"
 	"sync"
+	"time"
+	"unsafe"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
-// Función para extraer username y password del header Authorization
-func parseBasicAuth(authHeader string) (username, password string, ok bool) {
-	const prefix = "Basic "
-	if !strings.HasPrefix(authHeader, prefix) {
+var secretKey = []byte("https://github.com/IngenieroRicardo/http")
+
+var credentials = make(map[string]string)
+
+// --- JWT y credenciales ---
+
+//export GenerateToken
+func GenerateToken(userid C.int, expiration C.longlong) *C.char {
+	claims := jwt.MapClaims{
+		"user_id": int(userid),
+		"exp":     time.Now().Add(time.Second * time.Duration(expiration)).Unix(),
+		"iat":     time.Now().Unix(),
+		"iss":     "http-api",
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(secretKey)
+	if err != nil {
+		return C.CString(`{"error":"No se pudo generar el token"}`)
+	}
+	response := map[string]interface{}{
+		"access_token": tokenString,
+		"token_type":   "Bearer",
+		"expires_in":   int64(expiration),
+	}
+	jsonResponse, err := json.Marshal(response)
+	if err != nil {
+		return C.CString(`{"error":"No se pudo generar el JSON"}`)
+	}
+	return C.CString(string(jsonResponse))
+}
+
+//export ValidateToken
+func ValidateToken(tokenString *C.char) C.int {
+	goToken := C.GoString(tokenString)
+	token, err := jwt.Parse(goToken, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("método de firma inválido: %v", token.Header["alg"])
+		}
+		return secretKey, nil
+	})
+	if err != nil || !token.Valid {
+		return 0
+	}
+	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+		if exp, ok := claims["exp"].(float64); ok {
+			if int64(exp) > time.Now().Unix() {
+				return 1
+			}
+			return 0
+		}
+	}
+	return 0
+}
+
+//export LoadCredentials
+func LoadCredentials(credenciales *C.char) C.int {
+	goStr := C.GoString(credenciales)
+	newCreds := make(map[string]string)
+	pairs := strings.Split(goStr, ",")
+	for _, pair := range pairs {
+		partes := strings.SplitN(pair, ":", 2)
+		if len(partes) != 2 {
+			return 0
+		}
+		user := strings.TrimSpace(partes[0])
+		pass := strings.TrimSpace(partes[1])
+		if user == "" || pass == "" {
+			return 0
+		}
+		newCreds[user] = pass
+	}
+	credentials = newCreds
+	return 1
+}
+
+//export ValidateCredential
+func ValidateCredential(usuario *C.char, contrasena *C.char) C.int {
+	if storedPass, ok := credentials[C.GoString(usuario)]; ok && storedPass == C.GoString(contrasena) {
+		return 1
+	}
+	return 0
+}
+
+// --- Helpers internos ---
+
+func parseBasicAuth(authHeader string) (string, string, bool) {
+	if !strings.HasPrefix(authHeader, "Basic ") {
 		return "", "", false
 	}
-	c, err := base64.StdEncoding.DecodeString(authHeader[len(prefix):])
+	decoded, err := base64.StdEncoding.DecodeString(authHeader[6:])
 	if err != nil {
 		return "", "", false
 	}
-	cs := string(c)
-	s := strings.IndexByte(cs, ':')
-	if s < 0 {
+	parts := strings.SplitN(string(decoded), ":", 2)
+	if len(parts) != 2 {
 		return "", "", false
 	}
-	return cs[:s], cs[s+1:], true
+	return parts[0], parts[1], true
 }
 
-// Función para extraer token Bearer del header Authorization
-func parseBearerToken(authHeader string) (token string, ok bool) {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(authHeader, prefix) {
+func parseBearerToken(authHeader string) (string, bool) {
+	if !strings.HasPrefix(authHeader, "Bearer ") {
 		return "", false
 	}
-	return authHeader[len(prefix):], true
+	return authHeader[7:], true
 }
 
-// getClientIP obtiene la IP real del cliente
 func getClientIP(r *http.Request) string {
-    if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-        ips := strings.Split(xff, ",")
-        ip := strings.TrimSpace(ips[0])
-        if ip != "" {
-            return ip
-        }
-    }
-
-    if xri := r.Header.Get("X-Real-IP"); xri != "" {
-        return xri
-    }
-
-    if ra := r.RemoteAddr; ra != "" {
-        ip, _, err := net.SplitHostPort(ra)
-        if err == nil {
-            return ip
-        }
-        return ra
-    }
-
-    return ""
-}
-
-func getHeadersString(r *http.Request) string {
-	var sb strings.Builder
-	for name, values := range r.Header {
-		for _, value := range values {
-			sb.WriteString(name)
-			sb.WriteString(": ")
-			sb.WriteString(value)
-			sb.WriteString("\n")
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		ips := strings.Split(xff, ",")
+		ip := strings.TrimSpace(ips[0])
+		if ip != "" {
+			return ip
 		}
 	}
-	return sb.String()
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	if ra := r.RemoteAddr; ra != "" {
+		ip, _, err := net.SplitHostPort(ra)
+		if err == nil {
+			return ip
+		}
+		return ra
+	}
+	return ""
 }
 
-// Implementar un pool de memoria para requests
-var requestPool = sync.Pool{
-    New: func() interface{} {
-        return &C.HttpRequest{}
-    },
+func getHeadersJSON(r *http.Request) string {
+	headers, _ := json.Marshal(r.Header)
+	return string(headers)
 }
 
-//export RegisterHandler
-func RegisterHandler(path *C.char, handler C.HttpHandler) {
-    goPath := C.GoString(path)
-    http.HandleFunc(goPath, func(w http.ResponseWriter, r *http.Request) {
-        w.Header().Set("Content-Type", "application/json")
-
-        // Obtener request del pool
-        req := requestPool.Get().(*C.HttpRequest)
-        defer requestPool.Put(req)
-   
-
-        // Resetear los campos del request
-        *req = C.HttpRequest{} // Limpiar la estructura
-
-        // Configurar campos del request
-        req.method = C.CString(r.Method)
-        req.path = C.CString(r.URL.Path)
-        req.client_ip = C.CString(getClientIP(r))
-        req.headers = C.CString(getHeadersString(r))
-
-        // Manejo del body con tamaño máximo
-        if r.ContentLength > 0 && r.ContentLength < 10*1024*1024 { // 10MB máximo
-            body, _ := io.ReadAll(r.Body)
-            r.Body.Close()
-            req.body = C.CString(string(body))
-        } else {
-        	req.body = C.CString("")
-        }
-
-        // Procesar autenticación
-        if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-            if u, p, ok := parseBasicAuth(authHeader); ok {
-                req.username = C.CString(u)
-                req.password = C.CString(p)
-            } else {
-            	req.username = C.CString("")
-                req.password = C.CString("")
-            }
-            if token, ok := parseBearerToken(authHeader); ok {
-                req.bearer_token = C.CString(token)
-            } else {
-            	req.bearer_token = C.CString("")
-            }
-        }
-
-        // Llamar al handler C
-        cResponse := C.call_handler(handler, req)
-        defer C.FreeResponse(cResponse) // Usar nueva función de liberación
-
-        // Manejar respuesta
-        if cResponse != nil {
-            w.WriteHeader(int(cResponse.status_code))
-            if cResponse.body != nil {
-                w.Write([]byte(C.GoString(cResponse.body)))
-            }
-        } else {
-            sendErrorResponse(w, http.StatusInternalServerError, "Handler returned nil response")
-        }
-
-        // Liberar strings C (optimizado)
-        freeRequest(req)
-    })
+func sendErrorResponse(w http.ResponseWriter, status int, message string) {
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
-// Función helper para enviar respuestas de error
-func sendErrorResponse(w http.ResponseWriter, statusCode int, message string) {
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(statusCode)
-    json.NewEncoder(w).Encode(map[string]string{"error": message})
-}
-
-// Modificar freeRequest para liberar el nuevo campo
 func freeRequest(req *C.HttpRequest) {
 	C.free(unsafe.Pointer(req.method))
 	C.free(unsafe.Pointer(req.path))
@@ -219,142 +219,238 @@ func freeRequest(req *C.HttpRequest) {
 	C.free(unsafe.Pointer(req.username))
 	C.free(unsafe.Pointer(req.password))
 	C.free(unsafe.Pointer(req.bearer_token))
+	C.free(unsafe.Pointer(req.host))
 }
 
-//export GetHeaderValue
-func GetHeaderValue(req *C.HttpRequest, key *C.char) *C.char {
-    if req == nil || key == nil || req.headers == nil {
-        return nil
-    }
+// --- RegisterHandler y StartServer ---
 
-    keyStr := C.GoString(key)
-    headersStr := C.GoString(req.headers)
-    headers := strings.Split(headersStr, "\n")
+//export RegisterHandler
+func RegisterHandler(path *C.char, handler C.HttpHandler) {
+	goPath := C.GoString(path)
+	http.HandleFunc(goPath, func(w http.ResponseWriter, r *http.Request) {
+		// Cabeceras de seguridad
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self'; "+
+				"style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data: https:; "+
+				"font-src 'self'; "+
+				"connect-src 'self'; "+
+				"object-src 'none'; "+
+				"frame-ancestors 'none';")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		if r.TLS != nil || strings.ToLower(r.Header.Get("X-Forwarded-Proto")) == "https" {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+		}
+		w.Header().Set("Content-Type", "application/json")
 
-    for _, header := range headers {
-        parts := strings.SplitN(header, ": ", 2)
-        if len(parts) == 2 && strings.EqualFold(parts[0], keyStr) {
-            return C.CString(parts[1]) // Solo esta copia es suficiente
-        }
-    }
-    return nil
-}
+		// Leer body con las mismas validaciones que la versión Go
+		var bodyStr string
+		if r.ContentLength > 0 {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				contentType := r.Header.Get("Content-Type")
+				if !strings.HasPrefix(contentType, "application/json") {
+					sendErrorResponse(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+					return
+				}
+			}
+			body, err := io.ReadAll(r.Body)
+			r.Body.Close()
+			if err != nil {
+				sendErrorResponse(w, http.StatusBadRequest, "Error reading request body")
+				return
+			}
+			if len(body) > 0 && r.Method != http.MethodGet && r.Method != http.MethodHead {
+				if !json.Valid(body) {
+					sendErrorResponse(w, http.StatusBadRequest, "Invalid JSON format")
+					return
+				}
+			}
+			bodyStr = string(body)
+		}
 
-//export GetMethod
-func GetMethod(req *C.HttpRequest) *C.char {
-    if req == nil || req.method == nil {
-        return C.CString("")
-    }
-    return req.method
-}
+		// Autenticación: siempre inicializar a ""
+		username, password, bearerToken := "", "", ""
+		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+			if u, p, ok := parseBasicAuth(authHeader); ok {
+				username, password = u, p
+			} else if token, ok := parseBearerToken(authHeader); ok {
+				bearerToken = token
+			}
+		}
 
-//export GetPath
-func GetPath(req *C.HttpRequest) *C.char {
-    if req == nil || req.path == nil {
-        return C.CString("")
-    }
-    return req.path
-}
+		// Construir el request C
+		req := &C.HttpRequest{
+			method:       C.CString(r.Method),
+			path:         C.CString(r.URL.Path),
+			body:         C.CString(bodyStr),
+			client_ip:    C.CString(getClientIP(r)),
+			headers:      C.CString(getHeadersJSON(r)),
+			username:     C.CString(username),
+			password:     C.CString(password),
+			bearer_token: C.CString(bearerToken),
+			host:         C.CString(r.Host),
+		}
+		defer freeRequest(req)
 
-//export GetBody
-func GetBody(req *C.HttpRequest) *C.char {
-    if req == nil || req.path == nil {
-        return C.CString("")
-    }
-    return req.body
-}
+		cResponse := C.call_handler(handler, req)
+		defer C.FreeResponse(cResponse)
 
-//export GetClientIP
-func GetClientIP(req *C.HttpRequest) *C.char {
-    if req == nil || req.path == nil {
-        return C.CString("")
-    }
-    return req.client_ip
-}
-
-
-//export GetHeaders
-func GetHeaders(req *C.HttpRequest) *C.char {
-    if req == nil || req.path == nil {
-        return C.CString("")
-    }
-    return req.headers
-}
-
-//export GetUsername
-func GetUsername(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return C.CString("")
-    }
-    return req.username
-}
-
-//export GetPassword
-func GetPassword(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return C.CString("")
-    }
-    return req.password
-}
-
-//export GetBearerToken
-func GetBearerToken(req *C.HttpRequest) *C.char {
-    if req == nil {
-        return C.CString("")
-    }
-    return req.bearer_token
-}
-
-//export CreateResponse
-func CreateResponse(statusCode C.int, body *C.char) *C.HttpResponse {
-    res := (*C.HttpResponse)(C.malloc(C.sizeof_HttpResponse))
-    if res == nil {
-        return nil
-    }
-    
-    res.status_code = statusCode
-    res.body = nil
-    
-    if body != nil {
-        res.body = C.strdup(body) // Copia que debe ser liberada
-    }
-    
-    return res
+		if cResponse != nil {
+			w.WriteHeader(int(cResponse.status_code))
+			if cResponse.body != nil {
+				w.Write([]byte(C.GoString(cResponse.body)))
+			}
+		} else {
+			sendErrorResponse(w, http.StatusInternalServerError, "Handler returned nil response")
+		}
+	})
 }
 
 //export StartServer
 func StartServer(port *C.char, enableFilter C.int, certFile *C.char, keyFile *C.char) {
-    portStr := C.GoString(port)
-    
-    var handler http.Handler = http.DefaultServeMux
-    if enableFilter == 1 {
-        handler = ipFilterMiddleware(handler)
-    }
-    
-    go func() {
-        server := &http.Server{
-            Addr:    ":" + portStr,
-            Handler: handler,
-        }
-        
-        // Si se proporcionan certificados, usar HTTPS
-        if certFile != nil && keyFile != nil {
-            cert := C.GoString(certFile)
-            key := C.GoString(keyFile)
-            
-            if err := server.ListenAndServeTLS(cert, key); err != nil {
-                panic("Error al iniciar servidor HTTPS: " + err.Error())
-            }
-        } else {
-            // Sin certificados, usar HTTP
-            if err := server.ListenAndServe(); err != nil {
-                panic("Error al iniciar servidor HTTP: " + err.Error())
-            }
-        }
-    }()
+	portStr := C.GoString(port)
+
+	var handler http.Handler = http.DefaultServeMux
+	if enableFilter == 1 {
+		handler = ipFilterMiddleware(handler)
+	}
+
+	go func() {
+		server := &http.Server{
+			Addr:    ":" + portStr,
+			Handler: handler,
+		}
+		var err error
+		if certFile != nil && keyFile != nil {
+			cert := C.GoString(certFile)
+			key := C.GoString(keyFile)
+			if cert != "" && key != "" {
+				err = server.ListenAndServeTLS(cert, key)
+			} else {
+				err = server.ListenAndServe()
+			}
+		} else {
+			err = server.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
+			panic("Error al iniciar servidor: " + err.Error())
+		}
+	}()
 }
 
-// ListManager gestiona las listas de IPs
+// --- Getters exportados ---
+
+//export GetHost
+func GetHost(req *C.HttpRequest) *C.char {
+	if req == nil || req.host == nil {
+		return C.CString("")
+	}
+	return req.host
+}
+
+//export GetMethod
+func GetMethod(req *C.HttpRequest) *C.char {
+	if req == nil || req.method == nil {
+		return C.CString("")
+	}
+	return req.method
+}
+
+//export GetPath
+func GetPath(req *C.HttpRequest) *C.char {
+	if req == nil || req.path == nil {
+		return C.CString("")
+	}
+	return req.path
+}
+
+//export GetBody
+func GetBody(req *C.HttpRequest) *C.char {
+	if req == nil || req.body == nil {
+		return C.CString("")
+	}
+	return req.body
+}
+
+//export GetClientIP
+func GetClientIP(req *C.HttpRequest) *C.char {
+	if req == nil || req.client_ip == nil {
+		return C.CString("")
+	}
+	return req.client_ip
+}
+
+//export GetHeaders
+func GetHeaders(req *C.HttpRequest) *C.char {
+	if req == nil || req.headers == nil {
+		return C.CString("")
+	}
+	return req.headers
+}
+
+//export GetHeaderValue
+func GetHeaderValue(req *C.HttpRequest, key *C.char) *C.char {
+	if req == nil || key == nil || req.headers == nil {
+		return C.CString("")
+	}
+	var headers map[string][]string
+	if err := json.Unmarshal([]byte(C.GoString(req.headers)), &headers); err != nil {
+		return C.CString("")
+	}
+	keyStr := strings.ToLower(C.GoString(key))
+	for name, values := range headers {
+		if strings.ToLower(name) == keyStr && len(values) > 0 {
+			return C.CString(values[0])
+		}
+	}
+	return C.CString("")
+}
+
+//export GetUsername
+func GetUsername(req *C.HttpRequest) *C.char {
+	if req == nil || req.username == nil {
+		return C.CString("")
+	}
+	return req.username
+}
+
+//export GetPassword
+func GetPassword(req *C.HttpRequest) *C.char {
+	if req == nil || req.password == nil {
+		return C.CString("")
+	}
+	return req.password
+}
+
+//export GetBearerToken
+func GetBearerToken(req *C.HttpRequest) *C.char {
+	if req == nil || req.bearer_token == nil {
+		return C.CString("")
+	}
+	return req.bearer_token
+}
+
+//export CreateResponse
+func CreateResponse(statusCode C.int, body *C.char) *C.HttpResponse {
+	res := (*C.HttpResponse)(C.malloc(C.sizeof_HttpResponse))
+	if res == nil {
+		return nil
+	}
+	res.status_code = statusCode
+	res.body = nil
+	if body != nil {
+		res.body = C.strdup(body)
+	}
+	return res
+}
+
+// --- IP filtering ---
+
 type ListManager struct {
 	whitelist map[string]bool
 	blacklist map[string]bool
@@ -370,27 +466,20 @@ var ipListManager = &ListManager{
 func AddToWhitelist(ip *C.char) C.int {
 	ipStr := C.GoString(ip)
 	if net.ParseIP(ipStr) == nil {
-		return 0 // IP inválida
+		return 0
 	}
-
 	ipListManager.mu.Lock()
 	defer ipListManager.mu.Unlock()
-	
 	ipListManager.whitelist[ipStr] = true
-	// Si está en blacklist, la quitamos
 	delete(ipListManager.blacklist, ipStr)
-	
-	return 1 // Éxito
+	return 1
 }
 
 //export RemoveFromWhitelist
 func RemoveFromWhitelist(ip *C.char) C.int {
-	ipStr := C.GoString(ip)
-	
 	ipListManager.mu.Lock()
 	defer ipListManager.mu.Unlock()
-	
-	delete(ipListManager.whitelist, ipStr)
+	delete(ipListManager.whitelist, C.GoString(ip))
 	return 1
 }
 
@@ -398,38 +487,28 @@ func RemoveFromWhitelist(ip *C.char) C.int {
 func AddToBlacklist(ip *C.char) C.int {
 	ipStr := C.GoString(ip)
 	if net.ParseIP(ipStr) == nil {
-		return 0 // IP inválida
+		return 0
 	}
-
 	ipListManager.mu.Lock()
 	defer ipListManager.mu.Unlock()
-	
 	ipListManager.blacklist[ipStr] = true
-	// Si está en whitelist, la quitamos
 	delete(ipListManager.whitelist, ipStr)
-	
-	return 1 // Éxito
+	return 1
 }
 
 //export RemoveFromBlacklist
 func RemoveFromBlacklist(ip *C.char) C.int {
-	ipStr := C.GoString(ip)
-	
 	ipListManager.mu.Lock()
 	defer ipListManager.mu.Unlock()
-	
-	delete(ipListManager.blacklist, ipStr)
+	delete(ipListManager.blacklist, C.GoString(ip))
 	return 1
 }
 
 //export IsWhitelisted
 func IsWhitelisted(ip *C.char) C.int {
-	ipStr := C.GoString(ip)
-	
 	ipListManager.mu.RLock()
 	defer ipListManager.mu.RUnlock()
-	
-	if _, exists := ipListManager.whitelist[ipStr]; exists {
+	if ipListManager.whitelist[C.GoString(ip)] {
 		return 1
 	}
 	return 0
@@ -437,51 +516,39 @@ func IsWhitelisted(ip *C.char) C.int {
 
 //export IsBlacklisted
 func IsBlacklisted(ip *C.char) C.int {
-	ipStr := C.GoString(ip)
-	
 	ipListManager.mu.RLock()
 	defer ipListManager.mu.RUnlock()
-	
-	if _, exists := ipListManager.blacklist[ipStr]; exists {
+	if ipListManager.blacklist[C.GoString(ip)] {
 		return 1
 	}
 	return 0
 }
 
-// Middleware para verificación de IP
 func ipFilterMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clientIP := getClientIP(r)
-		
+
 		ipListManager.mu.RLock()
 		defer ipListManager.mu.RUnlock()
-		
-		// Primero verificar blacklist
-		if _, blacklisted := ipListManager.blacklist[clientIP]; blacklisted {
+
+		if ipListManager.blacklist[clientIP] {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
-		
-		// Si hay whitelist, verificar
-		if len(ipListManager.whitelist) > 0 {
-			if _, whitelisted := ipListManager.whitelist[clientIP]; !whitelisted {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
+		if len(ipListManager.whitelist) > 0 && !ipListManager.whitelist[clientIP] {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
 		}
-		
+
 		next.ServeHTTP(w, r)
 	})
 }
 
 //export LoadWhitelist
 func LoadWhitelist(ips *C.char) {
-	ipStr := C.GoString(ips)
-	ipList := strings.Split(ipStr, ",")
-	
+	ipList := strings.Split(C.GoString(ips), ",")
 	ipListManager.mu.Lock()
 	defer ipListManager.mu.Unlock()
-	
 	ipListManager.whitelist = make(map[string]bool)
 	for _, ip := range ipList {
 		ip = strings.TrimSpace(ip)
@@ -493,12 +560,9 @@ func LoadWhitelist(ips *C.char) {
 
 //export LoadBlacklist
 func LoadBlacklist(ips *C.char) {
-	ipStr := C.GoString(ips)
-	ipList := strings.Split(ipStr, ",")
-	
+	ipList := strings.Split(C.GoString(ips), ",")
 	ipListManager.mu.Lock()
 	defer ipListManager.mu.Unlock()
-	
 	ipListManager.blacklist = make(map[string]bool)
 	for _, ip := range ipList {
 		ip = strings.TrimSpace(ip)
